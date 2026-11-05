@@ -34,6 +34,12 @@ Two parts:
 - Keep custom event data in Google extended properties; the database is only a cache.
 - Google or network failures (offline, rate limit) must produce an error result and a retry, never a crash.
 
+## Agent workflow
+
+- When creating subagents for coding tasks, give them just enough context to complete the task.
+- Each distinct change is recorded in its own commit.
+- When working on a specific part of the app, use its own feature branch.
+
 ## Boundaries
 
 Always:
