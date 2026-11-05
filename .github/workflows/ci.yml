@@ -37,8 +37,8 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install mypy
-        run: python -m pip install mypy
+      - name: Install backend and typecheck dependencies
+        run: python -m pip install ./backend mypy
 
       - name: Run mypy
         run: mypy backend/src tests
@@ -55,8 +55,8 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install test dependencies
-        run: python -m pip install pytest httpx
+      - name: Install backend and test dependencies
+        run: python -m pip install ./backend pytest httpx
 
       - name: Run tests
         run: pytest
