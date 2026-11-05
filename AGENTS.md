@@ -39,6 +39,7 @@ Two parts:
 - When creating subagents for coding tasks, give them just enough context to complete the task.
 - Each distinct change is recorded in its own commit.
 - When working on a specific part of the app, use its own feature branch.
+- Pull requests are the delivery mechanism: the agent opens PRs for feature branches and does not merge or push to `main`; the user is the final entity who checks, reviews and accepts PRs.
 
 ## Boundaries
 
