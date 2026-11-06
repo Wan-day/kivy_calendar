@@ -1,8 +1,9 @@
 """SQLite-backed cache of calendar events.
 
 The cache is disposable: Google Calendar is the source of truth, so this module
-only stores a copy that can be rebuilt by deleting the database and syncing
-again.  It never stores credentials or the only copy of an event.
+only stores a copy that can be rebuilt by replacing its rows from a full sync.
+Clearing or replacing cached events never touches the retry queue.  This module
+never stores credentials or the only copy of an event.
 """
 
 from __future__ import annotations
