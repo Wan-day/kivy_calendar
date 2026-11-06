@@ -1,8 +1,10 @@
 """Tests for shared SQLite configuration."""
 
+import sqlite3
 from pathlib import Path
 
-from core.sqlite import Database, default_database_path
+from core.errors import ErrorCode, Result
+from core.sqlite import Database, default_database_path, run_in_transaction
 
 
 def test_database_path_can_be_overridden_by_environment(
@@ -35,3 +37,21 @@ def test_database_creates_its_parent_directory(tmp_path: Path) -> None:
     connection.close()
 
     assert database.path.is_file()
+
+
+def test_run_in_transaction_reports_filesystem_errors(tmp_path: Path) -> None:
+    """Unopenable database files become storage errors, not exceptions."""
+
+    class UnavailableDatabase(Database):
+        def connect(self) -> sqlite3.Connection:
+            raise OSError("disk unavailable")
+
+    result: Result[int] = run_in_transaction(
+        UnavailableDatabase(tmp_path / "calendar.db"),
+        "",
+        lambda connection: Result.ok(0),
+    )
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.STORAGE_ERROR
+    assert result.error.message == "disk unavailable"

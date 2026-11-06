@@ -71,5 +71,7 @@ def run_in_transaction[T](
             return result
     except sqlite3.Error as exc:
         return Result.fail(ErrorCode.STORAGE_ERROR, str(exc))
+    except OSError as exc:
+        return Result.fail(ErrorCode.STORAGE_ERROR, str(exc))
     except (TypeError, ValueError) as exc:
         return Result.fail(ErrorCode.STORAGE_ERROR, f"invalid stored data: {exc}")
