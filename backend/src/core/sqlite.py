@@ -75,3 +75,9 @@ def run_in_transaction[T](
         return Result.fail(ErrorCode.STORAGE_ERROR, str(exc))
     except (TypeError, ValueError) as exc:
         return Result.fail(ErrorCode.STORAGE_ERROR, f"invalid stored data: {exc}")
+    except LookupError as exc:
+        # Corrupt or outdated rows can raise ``KeyError``/``IndexError`` while
+        # being decoded, e.g. an unknown IANA zone name produces a
+        # ``ZoneInfoNotFoundError``.  The cache is disposable, so report those
+        # as storage errors instead of letting them cross the module boundary.
+        return Result.fail(ErrorCode.STORAGE_ERROR, f"invalid stored data: {exc}")

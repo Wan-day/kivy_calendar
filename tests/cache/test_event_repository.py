@@ -1,5 +1,6 @@
 """Tests for the disposable SQLite event cache repository."""
 
+from contextlib import closing
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -124,6 +125,45 @@ def test_list_is_ordered_by_start_time(repository: EventRepository) -> None:
     events = _cached_events(repository.list())
 
     assert [event.id for event in events] == ["earlier", "later"]
+
+
+def _corrupt_stored_timezone(
+    repository: EventRepository,
+    event_id: str,
+) -> None:
+    """Store an unknown IANA zone in a row, simulating an outdated cache."""
+    with closing(repository.database.connect()) as connection:
+        connection.execute(
+            "UPDATE events SET start_timezone = ? WHERE id = ?",
+            ("Not/AZone", event_id),
+        )
+        connection.commit()
+
+
+def test_get_returns_storage_error_for_an_invalid_stored_timezone(
+    repository: EventRepository,
+) -> None:
+    """A corrupt cache row fails with a storage error instead of raising."""
+    assert repository.create(_event()).is_ok
+    _corrupt_stored_timezone(repository, "event-1")
+
+    result = repository.get("event-1")
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.STORAGE_ERROR
+
+
+def test_list_returns_storage_error_for_an_invalid_stored_timezone(
+    repository: EventRepository,
+) -> None:
+    """Listing a corrupt cache row fails with a storage error instead of raising."""
+    assert repository.create(_event()).is_ok
+    _corrupt_stored_timezone(repository, "event-1")
+
+    result = repository.list()
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.STORAGE_ERROR
 
 
 def test_update_replaces_the_cached_event(repository: EventRepository) -> None:
