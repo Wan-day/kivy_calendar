@@ -13,6 +13,11 @@ venv/
 # Environment
 .env
 
+# Local SQLite databases
+*.db
+*.db-wal
+*.db-shm
+
 # IDE
 .vscode/
 .idea/
