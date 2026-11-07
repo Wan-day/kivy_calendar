@@ -19,6 +19,7 @@ class ErrorCode(StrEnum):
     ALREADY_EXISTS = "already_exists"
     INVALID_STATE = "invalid_state"
     STORAGE_ERROR = "storage_error"
+    UPSTREAM_ERROR = "upstream_error"
 
 
 @dataclass(frozen=True, slots=True)
