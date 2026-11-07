@@ -274,6 +274,64 @@ class RetryQueue:
 
         return run_in_transaction(self._database, _SCHEMA, operation)
 
+    def reclaim_stale(
+        self,
+        older_than: timedelta,
+        *,
+        now: datetime | None = None,
+    ) -> Result[list[RetryJob]]:
+        """Return stale claimed jobs to the pending state.
+
+        A worker can crash after :meth:`claim_due` but before it completes or
+        fails the job, leaving the job ``in_progress`` forever.  Jobs claimed at
+        or before ``now - older_than`` are reclaimed so another worker can pick
+        them up.  Attempt counts are preserved, and reclaimed jobs become due
+        immediately.
+        """
+        if older_than <= timedelta(0):
+            return Result.fail(
+                ErrorCode.INVALID_ARGUMENT,
+                "older_than must be positive",
+            )
+        try:
+            current_time = _as_utc(now if now is not None else datetime.now(UTC))
+        except ValueError as exc:
+            return Result.fail(ErrorCode.INVALID_ARGUMENT, str(exc))
+
+        current_timestamp = _format_timestamp(current_time)
+        cutoff = _format_timestamp(current_time - older_than)
+
+        def operation(connection: sqlite3.Connection) -> Result[list[RetryJob]]:
+            rows = connection.execute(
+                f"SELECT {_COLUMN_LIST} FROM retry_jobs "
+                "WHERE status = ? AND claimed_at IS NOT NULL AND claimed_at <= ? "
+                "ORDER BY claimed_at, created_at, id",
+                (RetryStatus.IN_PROGRESS.value, cutoff),
+            ).fetchall()
+            reclaimed: list[RetryJob] = []
+            for row in rows:
+                cursor = connection.execute(
+                    "UPDATE retry_jobs "
+                    "SET status = ?, available_at = ?, claimed_at = NULL, "
+                    "updated_at = ? "
+                    "WHERE id = ? AND status = ?",
+                    (
+                        RetryStatus.PENDING.value,
+                        current_timestamp,
+                        current_timestamp,
+                        row["id"],
+                        RetryStatus.IN_PROGRESS.value,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    continue
+                reclaimed_row = _find_job(connection, row["id"])
+                if reclaimed_row is not None:
+                    reclaimed.append(_row_to_job(reclaimed_row))
+            return Result.ok(reclaimed)
+
+        return run_in_transaction(self._database, _SCHEMA, operation)
+
     def complete(
         self,
         job_id: str,
