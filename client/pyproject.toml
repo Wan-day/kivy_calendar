@@ -1,0 +1,32 @@
+[project]
+name = "kivy-calendar-client"
+version = "0.1.0"
+description = "Kivy client for the self-hosted Kivy calendar backend"
+requires-python = ">=3.14"
+dependencies = [
+    "kivy",
+]
+
+[build-system]
+requires = ["setuptool>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.14"

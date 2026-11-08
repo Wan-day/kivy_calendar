@@ -4,14 +4,15 @@ A calendar app to track things easier
 
 ## Status
 
-The backend foundations and the FastAPI calendar API are implemented; the
-client has not started.
+The backend foundations and the FastAPI calendar API are implemented, and a
+basic Kivy client UI has been scaffolded.
 
 - **Backend**: domain event model, SQLite cache, durable retry queue, Google
   Calendar provider (list/create/patch/delete), OAuth credential helper, a
   write-through sync service, and a FastAPI app exposing `/health`, the
   `/events` CRUD routes, and the `/sync` route behind bearer-token auth.
-- **Client**: not started.
+- **Client**: basic Kivy app (`client/src/kivy_calendar`) with an event list
+  and an add-event screen that talk to the backend API.
 - **Tests**: backend unit tests use an in-memory fake provider and never call
   Google or touch a real calendar.
 
@@ -80,7 +81,6 @@ Failures are returned as structured JSON error bodies:
 
 ## Planned
 
-- Kivy client
 - Docker Compose deployment
 - CI/CD via GitHub Actions
 
