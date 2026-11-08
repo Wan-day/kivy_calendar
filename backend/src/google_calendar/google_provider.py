@@ -15,8 +15,14 @@ to 1024 characters; callers should keep metadata small.
 All-day events are not supported yet.  The domain model always carries timed
 values, so :meth:`GoogleCalendarProvider.list_events` skips all-day entries and
 :meth:`GoogleCalendarProvider.get_event` reports a clear ``INVALID_EVENT``
-error instead of crashing.  Timed events must carry an explicit IANA time zone
-name in Google's ``timeZone`` field.
+error instead of crashing.
+
+Timed events normally repeat their IANA zone in Google's ``timeZone`` field.
+Some events created by other clients instead carry only an offset inside the
+ISO ``dateTime`` string.  A zero offset is mapped to ``UTC``; an event with a
+non-zero offset and no ``timeZone`` cannot be mapped to an IANA zone, so
+:meth:`GoogleCalendarProvider.list_events` skips it and
+:meth:`GoogleCalendarProvider.get_event` returns ``INVALID_EVENT``.
 
 Expected failures are mapped to :class:`~core.errors.Result` values:
 
@@ -37,7 +43,7 @@ Operational exceptions never escape the provider.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from google.oauth2.credentials import Credentials
@@ -166,7 +172,9 @@ class GoogleCalendarProvider:
                     continue
                 mapped = _event_from_resource(item)
                 if mapped.error is not None:
-                    return Result.fail(mapped.error.code, mapped.error.message)
+                    # One unmappable entry (an all-day event or an offset-only
+                    # event without an IANA zone) must not abort the whole sync.
+                    continue
                 if mapped.value is not None:
                     events.append(mapped.value)
 
@@ -348,15 +356,21 @@ def _resource_time(
         )
 
     timezone = raw.get("timeZone")
-    if not isinstance(timezone, str) or not timezone.strip():
-        zone_key = getattr(parsed.tzinfo, "key", None)
-        if not isinstance(zone_key, str) or not zone_key:
-            return Result.fail(
-                ErrorCode.INVALID_EVENT,
-                f"Google Calendar event is missing the IANA zone for {field}",
-            )
-        timezone = zone_key
-    return Result.ok((parsed, timezone.strip()))
+    if isinstance(timezone, str) and timezone.strip():
+        return Result.ok((parsed, timezone.strip()))
+
+    zone_key = getattr(parsed.tzinfo, "key", None)
+    if isinstance(zone_key, str) and zone_key:
+        return Result.ok((parsed, zone_key))
+
+    # Google allows single events to carry only an offset in ``dateTime``.  A
+    # zero offset is unambiguously UTC; any other offset has no IANA name here.
+    if parsed.utcoffset() == timedelta(0):
+        return Result.ok((parsed, "UTC"))
+    return Result.fail(
+        ErrorCode.INVALID_EVENT,
+        f"Google Calendar event has a non-UTC offset but no IANA zone for {field}",
+    )
 
 
 def _items_from_response(raw: object) -> Result[list[object]]:

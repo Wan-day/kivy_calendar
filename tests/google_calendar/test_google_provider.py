@@ -7,7 +7,7 @@ real calendars are involved.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
@@ -73,6 +73,21 @@ def _all_day_resource(event_id: str = "all-day") -> dict[str, Any]:
         "summary": "Holiday",
         "start": {"date": "2026-11-06"},
         "end": {"date": "2026-11-07"},
+    }
+
+
+def _offset_only_resource(
+    event_id: str = "offset1",
+    *,
+    start: str = "2026-11-06T09:00:00+05:00",
+    end: str = "2026-11-06T09:30:00+05:00",
+) -> dict[str, Any]:
+    """Return a timed resource that carries an offset but no ``timeZone``."""
+    return {
+        "id": event_id,
+        "summary": "Offset-only event",
+        "start": {"dateTime": start},
+        "end": {"dateTime": end},
     }
 
 
@@ -256,6 +271,61 @@ def test_get_rejects_an_all_day_event_with_a_clear_error(
     assert result.error is not None
     assert result.error.code is ErrorCode.INVALID_EVENT
     assert "all-day" in result.error.message
+
+
+def test_get_maps_an_offset_only_utc_event_to_utc(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A missing ``timeZone`` with a zero offset is unambiguously UTC."""
+    service.events.return_value.get.return_value.execute.return_value = (
+        _offset_only_resource(
+            start="2026-11-06T09:00:00Z",
+            end="2026-11-06T09:30:00Z",
+        )
+    )
+
+    event = _loaded_event(provider.get_event("offset1"))
+
+    assert event.start_timezone == "UTC"
+    assert event.end_timezone == "UTC"
+    assert event.start == datetime(2026, 11, 6, 9, 0, tzinfo=UTC)
+    assert event.end == datetime(2026, 11, 6, 9, 30, tzinfo=UTC)
+
+
+def test_get_rejects_an_offset_only_non_utc_event(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A non-zero offset alone cannot be mapped to an IANA zone."""
+    service.events.return_value.get.return_value.execute.return_value = (
+        _offset_only_resource()
+    )
+
+    result = provider.get_event("offset1")
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.INVALID_EVENT
+    assert "IANA" in result.error.message
+
+
+def test_list_skips_an_offset_only_non_utc_event(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """One unmappable event does not abort the rest of the sync."""
+    service.events.return_value.list.return_value.execute.return_value = {
+        "items": [
+            _offset_only_resource("offset1"),
+            _resource("valid1"),
+        ]
+    }
+
+    result = provider.list_events()
+
+    assert result.is_ok
+    assert result.value is not None
+    assert [event.id for event in result.value] == ["valid1"]
 
 
 def test_list_follows_pagination_and_skips_all_day_events(
