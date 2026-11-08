@@ -106,9 +106,13 @@ class GoogleCalendarProvider:
         )
 
     def update_event(self, event: Event) -> Result[Event]:
-        """Replace the upstream event that has the same id."""
+        """Patch the upstream event that has the same id.
+
+        ``patch`` only changes the fields the backend sends, so data this
+        adapter does not model (location, attendees, reminders, ...) survives.
+        """
         return self._event_request(
-            lambda: self._service.events().update(
+            lambda: self._service.events().patch(
                 calendarId=self._calendar_id,
                 eventId=event.id,
                 body=_event_to_payload(event),

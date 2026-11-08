@@ -167,22 +167,28 @@ def test_create_maps_the_event_to_a_google_payload(
     }
 
 
-def test_update_uses_the_event_id_and_new_payload(
+def test_update_patches_the_event_id_and_new_payload(
     provider: GoogleCalendarProvider,
     service: Mock,
 ) -> None:
-    """Update targets the same client-generated id."""
+    """Update patches the same client-generated id instead of replacing it."""
     event = _event(summary="Updated standup")
-    update = service.events.return_value.update
-    update.return_value.execute.return_value = _resource(summary="Updated standup")
+    patch = service.events.return_value.patch
+    patch.return_value.execute.return_value = _resource(
+        summary="Updated standup",
+        location="Room 1",
+    )
 
     result = provider.update_event(event)
 
     assert _event_result(result) == event
-    call = update.call_args.kwargs
+    service.events.return_value.update.assert_not_called()
+    patch.assert_called_once()
+    call = patch.call_args.kwargs
     assert call["calendarId"] == "primary"
     assert call["eventId"] == event.id
     assert call["body"]["summary"] == "Updated standup"
+    assert "location" not in call["body"]
 
 
 def test_delete_calls_google_and_returns_unit(
