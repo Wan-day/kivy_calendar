@@ -9,20 +9,21 @@ is disposable and can be rebuilt from the provider with a full sync.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from cache.repository import EventRepository
 from core.errors import Error, ErrorCode, Result, is_retryable
 from domain.event import Event
-from google_calendar.provider import CalendarProvider
+from google_calendar.provider import CalendarProvider, ProviderOperation
 from retry.queue import RetryJob, RetryQueue
 
-CREATE_OPERATION = "create_event"
-UPDATE_OPERATION = "update_event"
-DELETE_OPERATION = "delete_event"
+CREATE_OPERATION = ProviderOperation.CREATE.value
+UPDATE_OPERATION = ProviderOperation.UPDATE.value
+DELETE_OPERATION = ProviderOperation.DELETE.value
 
 DEFAULT_RETRY_BATCH_SIZE = 10
+DEFAULT_RETRY_LEASE = timedelta(minutes=5)
 
 _EVENT_PAYLOAD_KEY = "event"
 _EVENT_ID_PAYLOAD_KEY = "event_id"
@@ -38,13 +39,17 @@ class SyncService:
         retry_queue: RetryQueue,
         *,
         retry_batch_size: int = DEFAULT_RETRY_BATCH_SIZE,
+        retry_lease: timedelta = DEFAULT_RETRY_LEASE,
     ) -> None:
         if retry_batch_size < 1:
             raise ValueError("retry_batch_size must be at least 1")
+        if retry_lease <= timedelta(0):
+            raise ValueError("retry_lease must be positive")
         self._provider = provider
         self._repository = repository
         self._retry_queue = retry_queue
         self._retry_batch_size = retry_batch_size
+        self._retry_lease = retry_lease
 
     def create_event(self, event: Event) -> Result[Event]:
         """Create ``event`` in Google first, then cache the confirmed event.
@@ -127,11 +132,18 @@ class SyncService:
     ) -> Result[list[RetryJob]]:
         """Replay due write retries against the provider.
 
-        Successful replays are completed.  Provider failures are recorded on the
-        job and rescheduled with the queue's exponential backoff.  ``now`` is
-        forwarded to every queue transition so a caller can use one clock for
-        the whole cycle.
+        Jobs abandoned by a crashed worker are reclaimed first, then due jobs
+        are claimed.  Successful replays are completed and provider failures are
+        recorded on the job and rescheduled with the queue's exponential
+        backoff.  Every claimed job is attempted even if one queue transition
+        fails; those failures are aggregated and returned.  ``now`` is forwarded
+        to every queue transition so a caller can use one clock for the whole
+        cycle.
         """
+        reclaimed = self._retry_queue.reclaim_stale(self._retry_lease, now=now)
+        if reclaimed.error is not None:
+            return Result.fail(reclaimed.error.code, reclaimed.error.message)
+
         claimed = self._retry_queue.claim_due(
             now=now,
             limit=limit if limit is not None else self._retry_batch_size,
@@ -140,12 +152,25 @@ class SyncService:
             return Result.fail(claimed.error.code, claimed.error.message)
 
         processed: list[RetryJob] = []
+        transition_errors: list[Error] = []
         for job in claimed.value or []:
             outcome = self._process_job(job, now=now)
             if outcome.error is not None:
-                return Result.fail(outcome.error.code, outcome.error.message)
+                transition_errors.append(
+                    Error(
+                        outcome.error.code,
+                        f"retry job {job.id!r}: {outcome.error.message}",
+                    )
+                )
+                continue
             if outcome.value is not None:
                 processed.append(outcome.value)
+
+        if transition_errors:
+            return Result.fail(
+                _aggregate_error_code(transition_errors),
+                "; ".join(error.message for error in transition_errors),
+            )
         return Result.ok(processed)
 
     def _process_job(
@@ -155,9 +180,13 @@ class SyncService:
         now: datetime | None,
     ) -> Result[RetryJob]:
         """Replay one claimed job and record its final queue state."""
-        if job.operation in (CREATE_OPERATION, UPDATE_OPERATION):
-            return self._replay_write(job, now=now)
-        if job.operation == DELETE_OPERATION:
+        operation = _as_operation(job.operation)
+        if (
+            operation is ProviderOperation.CREATE
+            or operation is ProviderOperation.UPDATE
+        ):
+            return self._replay_write(job, operation=operation, now=now)
+        if operation is ProviderOperation.DELETE:
             return self._replay_delete(job, now=now)
         return self._retry_queue.fail(
             job.id,
@@ -169,6 +198,7 @@ class SyncService:
         self,
         job: RetryJob,
         *,
+        operation: ProviderOperation,
         now: datetime | None,
     ) -> Result[RetryJob]:
         event = _event_from_payload(job.payload)
@@ -179,20 +209,17 @@ class SyncService:
                 now=now,
             )
 
-        if job.operation == CREATE_OPERATION:
+        if operation is ProviderOperation.CREATE:
             result = self._provider.create_event(event)
         else:
             result = self._provider.update_event(event)
 
         if result.error is not None:
             if (
-                job.operation == CREATE_OPERATION
+                operation is ProviderOperation.CREATE
                 and result.error.code is ErrorCode.ALREADY_EXISTS
             ):
-                # The event id is client-generated, so an earlier attempt may
-                # have reached Google before the worker recorded success.
-                self._cache_event(event)
-                return self._retry_queue.complete(job.id, now=now)
+                return self._replay_existing_create(job, event, now=now)
             return self._retry_queue.fail(
                 job.id,
                 _describe_error(result.error),
@@ -200,6 +227,36 @@ class SyncService:
             )
 
         self._cache_event(result.value if result.value is not None else event)
+        return self._retry_queue.complete(job.id, now=now)
+
+    def _replay_existing_create(
+        self,
+        job: RetryJob,
+        event: Event,
+        *,
+        now: datetime | None,
+    ) -> Result[RetryJob]:
+        """Recover a create whose id already reached Google.
+
+        The event id is client-generated, so an earlier attempt may have arrived
+        before the worker recorded success.  Google's copy is authoritative:
+        fetch and cache it rather than the local queued payload.  If the fetch
+        fails the job stays claimed for the next reclaim cycle and the fetch
+        error is returned without touching the cache.
+        """
+        existing = self._provider.get_event(event.id)
+        if existing.error is not None:
+            return Result.fail(existing.error.code, existing.error.message)
+
+        confirmed = existing.value
+        if confirmed is None:
+            return Result.fail(
+                ErrorCode.NOT_FOUND,
+                f"event {event.id!r} was reported as existing but could not "
+                "be fetched from Google",
+            )
+
+        self._cache_event(confirmed)
         return self._retry_queue.complete(job.id, now=now)
 
     def _replay_delete(
@@ -263,6 +320,22 @@ class SyncService:
                 f"{queued.error.message}",
             )
         return Result.fail(failure.code, failure.message)
+
+
+def _as_operation(value: str) -> ProviderOperation | None:
+    """Parse a queued operation name, or ``None`` when it is unsupported."""
+    try:
+        return ProviderOperation(value)
+    except ValueError:
+        return None
+
+
+def _aggregate_error_code(errors: list[Error]) -> ErrorCode:
+    """Prefer a storage failure when several retry transitions failed."""
+    for error in errors:
+        if error.code is ErrorCode.STORAGE_ERROR:
+            return ErrorCode.STORAGE_ERROR
+    return errors[0].code
 
 
 def _event_from_payload(payload: dict[str, Any]) -> Event | None:

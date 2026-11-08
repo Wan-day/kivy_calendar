@@ -10,6 +10,7 @@ from core.errors import ErrorCode, Result
 from core.sqlite import Database
 from domain.event import Event
 from google_calendar.fake import FakeCalendarProvider
+from google_calendar.provider import ProviderOperation
 from retry.queue import RetryJob, RetryQueue, RetryStatus
 from sync.service import (
     CREATE_OPERATION,
@@ -63,6 +64,30 @@ def _cached(repository: EventRepository, event_id: str) -> Event | None:
         return None
     assert result.is_ok, result.error
     return result.value
+
+
+class _FailingCompleteQueue(RetryQueue):
+    """A queue whose next completion for one job fails once."""
+
+    def __init__(self, database: Database, *, fail_job_id: str) -> None:
+        super().__init__(
+            database,
+            base_delay_seconds=10.0,
+            max_delay_seconds=60.0,
+        )
+        self._fail_job_id = fail_job_id
+        self._failed = False
+
+    def complete(
+        self,
+        job_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> Result[RetryJob]:
+        if job_id == self._fail_job_id and not self._failed:
+            self._failed = True
+            return Result.fail(ErrorCode.STORAGE_ERROR, "database is locked")
+        return super().complete(job_id, now=now)
 
 
 @pytest.fixture
@@ -496,3 +521,168 @@ def test_process_due_retries_respects_the_limit(
 
     assert len(processed) == 1
     assert len(_jobs(retry_queue.list_due())) == 1
+
+
+def test_process_due_retries_reclaims_a_stale_claimed_job(
+    service: SyncService,
+    provider: FakeCalendarProvider,
+    retry_queue: RetryQueue,
+) -> None:
+    """A job abandoned by a crashed worker is picked up on the next cycle."""
+    event = _event()
+    queued = _job(
+        retry_queue.enqueue(
+            CREATE_OPERATION,
+            {"event": event.model_dump(mode="json")},
+            now=NOW,
+        )
+    )
+    _jobs(retry_queue.claim_due(now=NOW))
+
+    processed = _jobs(service.process_due_retries(now=NOW + timedelta(minutes=10)))
+
+    assert len(processed) == 1
+    assert processed[0].id == queued.id
+    assert processed[0].status is RetryStatus.COMPLETED
+    assert processed[0].attempts == 2
+    assert provider.events == [event]
+
+
+def test_process_due_retries_respects_the_configured_lease(
+    provider: FakeCalendarProvider,
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A recent claim is left alone until the configured lease expires."""
+    event = _event()
+    queued = _job(
+        retry_queue.enqueue(
+            CREATE_OPERATION,
+            {"event": event.model_dump(mode="json")},
+            now=NOW,
+        )
+    )
+    _jobs(retry_queue.claim_due(now=NOW))
+    service = SyncService(
+        provider,
+        repository,
+        retry_queue,
+        retry_lease=timedelta(hours=1),
+    )
+
+    processed = _jobs(service.process_due_retries(now=NOW + timedelta(minutes=10)))
+
+    assert processed == []
+    assert _job(retry_queue.get(queued.id)).status is RetryStatus.IN_PROGRESS
+
+
+def test_process_due_retries_continues_after_a_transition_failure(
+    provider: FakeCalendarProvider,
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """One failed queue transition does not abandon the rest of the batch."""
+    first = _event("first", hour=9)
+    second = _event("second", hour=10)
+    first_job = _job(
+        retry_queue.enqueue(
+            CREATE_OPERATION,
+            {"event": first.model_dump(mode="json")},
+            now=NOW,
+        )
+    )
+    second_job = _job(
+        retry_queue.enqueue(
+            CREATE_OPERATION,
+            {"event": second.model_dump(mode="json")},
+            now=NOW,
+        )
+    )
+    failing_queue = _FailingCompleteQueue(
+        retry_queue.database,
+        fail_job_id=first_job.id,
+    )
+    service = SyncService(provider, repository, failing_queue)
+
+    result = service.process_due_retries(now=NOW)
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.STORAGE_ERROR
+    assert first_job.id in result.error.message
+    assert provider.events == [first, second]
+    assert _job(retry_queue.get(second_job.id)).status is RetryStatus.COMPLETED
+    assert _job(retry_queue.get(first_job.id)).status is RetryStatus.IN_PROGRESS
+
+    recovered = _jobs(
+        service.process_due_retries(now=NOW + timedelta(minutes=10))
+    )
+
+    assert len(recovered) == 1
+    assert recovered[0].id == first_job.id
+    assert recovered[0].status is RetryStatus.COMPLETED
+    assert _cached(repository, first.id) == first
+
+
+def test_create_retry_caches_the_provider_state_on_already_exists(
+    service: SyncService,
+    provider: FakeCalendarProvider,
+    repository: EventRepository,
+) -> None:
+    """A duplicate create trusts Google's copy over the queued payload."""
+    local = _event(summary="Queued local state")
+    provider.fail_next("create_event", message="connection dropped")
+    assert service.create_event(local).is_error
+    remote = _event(summary="Provider state")
+    assert provider.create_event(remote).is_ok
+
+    processed = _jobs(service.process_due_retries())
+
+    assert processed[0].status is RetryStatus.COMPLETED
+    assert _cached(repository, local.id) == remote
+
+
+def test_create_retry_does_not_cache_when_the_provider_fetch_fails(
+    service: SyncService,
+    provider: FakeCalendarProvider,
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A failed recovery fetch leaves the cache alone and reports the error."""
+    local = _event(summary="Queued local state")
+    provider.fail_next("create_event", message="connection dropped")
+    assert service.create_event(local).is_error
+    queued = _jobs(retry_queue.list_due())[0]
+    remote = _event(summary="Provider state")
+    assert provider.create_event(remote).is_ok
+    provider.fail_next("get_event", message="still offline")
+
+    result = service.process_due_retries()
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.UPSTREAM_ERROR
+    assert "still offline" in result.error.message
+    assert _cached(repository, local.id) is None
+    assert _job(retry_queue.get(queued.id)).status is RetryStatus.IN_PROGRESS
+
+
+def test_retry_operation_names_reuse_the_provider_enum() -> None:
+    """Queue operation strings have a single source of truth."""
+    assert CREATE_OPERATION == ProviderOperation.CREATE.value
+    assert UPDATE_OPERATION == ProviderOperation.UPDATE.value
+    assert DELETE_OPERATION == ProviderOperation.DELETE.value
+
+
+def test_sync_service_rejects_a_non_positive_retry_lease(
+    provider: FakeCalendarProvider,
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A zero lease would make every in-flight job immediately reclaimable."""
+    with pytest.raises(ValueError):
+        SyncService(
+            provider,
+            repository,
+            retry_queue,
+            retry_lease=timedelta(0),
+        )
+
