@@ -411,6 +411,37 @@ def test_process_due_retries_backs_off_while_the_provider_stays_down(
     assert _cached(repository, event.id) == event
 
 
+def test_process_due_retries_fails_non_retryable_errors_permanently(
+    service: SyncService,
+    provider: FakeCalendarProvider,
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """An authentication failure during replay is not retried forever."""
+    event = _event()
+    provider.fail_next("create_event", message="offline")
+    assert service.create_event(event).is_error
+    queued = _jobs(retry_queue.list_due())[0]
+    provider.fail_next(
+        "create_event",
+        code=ErrorCode.AUTH_ERROR,
+        message="token revoked",
+    )
+
+    processed = _jobs(service.process_due_retries())
+
+    assert len(processed) == 1
+    assert processed[0].id == queued.id
+    assert processed[0].status is RetryStatus.FAILED
+    assert processed[0].attempts == 1
+    assert processed[0].last_error is not None
+    assert "auth_error" in processed[0].last_error
+    assert provider.events == []
+    assert _cached(repository, event.id) is None
+    later = datetime.now(UTC) + timedelta(days=1)
+    assert _jobs(retry_queue.list_due(now=later)) == []
+
+
 def test_process_due_retries_replays_updates_and_deletes(
     service: SyncService,
     provider: FakeCalendarProvider,

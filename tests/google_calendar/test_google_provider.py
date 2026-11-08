@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from core.errors import ErrorCode, Result
 from domain.event import Event
+from google.auth.exceptions import RefreshError
 from google_calendar import google_provider
 from google_calendar.google_provider import GoogleCalendarProvider
 from google_calendar.provider import CalendarProvider
@@ -380,6 +381,7 @@ def test_list_stops_when_google_returns_no_items(
     ("status", "expected"),
     [
         (400, ErrorCode.INVALID_ARGUMENT),
+        (401, ErrorCode.AUTH_ERROR),
         (404, ErrorCode.NOT_FOUND),
         (410, ErrorCode.NOT_FOUND),
         (409, ErrorCode.ALREADY_EXISTS),
@@ -404,6 +406,22 @@ def test_http_statuses_map_to_error_codes(
 
     assert result.error is not None
     assert result.error.code is expected
+
+
+def test_refresh_failures_map_to_auth_errors(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A revoked or invalid refresh token is a permanent authentication error."""
+    service.events.return_value.insert.return_value.execute.side_effect = (
+        RefreshError("invalid_grant: token has been revoked")
+    )
+
+    result = provider.create_event(_event())
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.AUTH_ERROR
+    assert "authentication" in result.error.message
 
 
 @pytest.mark.parametrize(

@@ -220,11 +220,7 @@ class SyncService:
                 and result.error.code is ErrorCode.ALREADY_EXISTS
             ):
                 return self._replay_existing_create(job, event, now=now)
-            return self._retry_queue.fail(
-                job.id,
-                _describe_error(result.error),
-                now=now,
-            )
+            return self._record_provider_failure(job, result.error, now=now)
 
         self._cache_event(result.value if result.value is not None else event)
         return self._retry_queue.complete(job.id, now=now)
@@ -285,14 +281,35 @@ class SyncService:
                 # The event is already gone, which is the outcome we wanted.
                 self._repository.delete(event_id)
                 return self._retry_queue.complete(job.id, now=now)
-            return self._retry_queue.fail(
-                job.id,
-                _describe_error(result.error),
-                now=now,
-            )
+            return self._record_provider_failure(job, result.error, now=now)
 
         self._repository.delete(event_id)
         return self._retry_queue.complete(job.id, now=now)
+
+    def _record_provider_failure(
+        self,
+        job: RetryJob,
+        error: Error,
+        *,
+        now: datetime | None,
+    ) -> Result[RetryJob]:
+        """Record a replayed write failure with the right retry semantics.
+
+        Transient upstream failures back off and may be tried again; permanent
+        failures (invalid arguments, authentication errors, ...) fail the job
+        immediately because replaying them cannot succeed.
+        """
+        if is_retryable(error):
+            return self._retry_queue.fail(
+                job.id,
+                _describe_error(error),
+                now=now,
+            )
+        return self._retry_queue.fail_permanently(
+            job.id,
+            _describe_error(error),
+            now=now,
+        )
 
     def _cache_event(self, event: Event) -> None:
         """Best-effort cache refresh after the provider has confirmed a write.

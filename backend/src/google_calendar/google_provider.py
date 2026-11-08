@@ -30,11 +30,18 @@ Expected failures are mapped to :class:`~core.errors.Result` values:
 HTTP status  Error code
 ===========  =========================================
 400          ``INVALID_ARGUMENT``
+401          ``AUTH_ERROR``
 404 / 410    ``NOT_FOUND``
 409          ``ALREADY_EXISTS``
 429 / 5xx    ``UPSTREAM_ERROR``
 other        ``UPSTREAM_ERROR``
 ===========  =========================================
+
+401 responses and OAuth refresh failures (:class:`google.auth.exceptions.RefreshError`)
+are permanent ``AUTH_ERROR`` failures.  403 is treated as a retryable
+``UPSTREAM_ERROR`` because reliably distinguishing quota/rate-limit reasons
+from a revoked grant requires parsing Google's error payload; the job will
+eventually exhaust its retries instead.
 
 Network timeouts and connection failures also become ``UPSTREAM_ERROR``.
 Operational exceptions never escape the provider.
@@ -46,6 +53,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build  # type: ignore[import-untyped]
 from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
@@ -419,7 +427,12 @@ def _is_all_day_resource(raw: object) -> bool:
 
 
 def _error_from_exception(exc: BaseException) -> Error:
-    """Map an ``HttpError`` or network failure onto a stable error code."""
+    """Map an ``HttpError`` or OAuth/network failure onto a stable error code."""
+    if isinstance(exc, RefreshError):
+        return Error(
+            ErrorCode.AUTH_ERROR,
+            f"Google Calendar authentication failed: {exc}",
+        )
     if isinstance(exc, HttpError):
         status = _http_status(exc)
         return Error(_code_for_status(status), _http_error_message(status, exc))
@@ -444,13 +457,16 @@ def _code_for_status(status: int | None) -> ErrorCode:
     match status:
         case 400:
             return ErrorCode.INVALID_ARGUMENT
+        case 401:
+            return ErrorCode.AUTH_ERROR
         case 404 | 410:
             return ErrorCode.NOT_FOUND
         case 409:
             return ErrorCode.ALREADY_EXISTS
         case _:
-            # 429, 5xx, and unknown statuses are transient from the caller's
-            # point of view; retrying is safe because creates use a client id.
+            # 403, 429, 5xx, and unknown statuses are transient from the
+            # caller's point of view; retrying is safe because creates use a
+            # client id.  403 reason parsing is not implemented.
             return ErrorCode.UPSTREAM_ERROR
 
 
