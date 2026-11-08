@@ -17,7 +17,10 @@ from core.errors import ErrorCode, Result
 from domain.event import Event
 from google.auth.exceptions import RefreshError
 from google_calendar import google_provider
-from google_calendar.google_provider import GoogleCalendarProvider
+from google_calendar.google_provider import (
+    GoogleCalendarProvider,
+    generate_event_id,
+)
 from google_calendar.provider import CalendarProvider
 from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
@@ -25,7 +28,7 @@ BERLIN = ZoneInfo("Europe/Berlin")
 
 
 def _event(
-    event_id: str = "event-1",
+    event_id: str = "event1",
     *,
     summary: str = "Team standup",
 ) -> Event:
@@ -44,7 +47,7 @@ def _event(
 
 
 def _resource(
-    event_id: str = "event-1",
+    event_id: str = "event1",
     *,
     summary: str = "Team standup",
     **overrides: Any,
@@ -192,6 +195,46 @@ def test_update_patches_the_event_id_and_new_payload(
     assert "location" not in call["body"]
 
 
+@pytest.mark.parametrize(
+    "event_id",
+    ["abcd", "event-1", "EVENT1", "event_1", "wxyz1"],
+)
+def test_create_rejects_ids_google_would_reject(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+    event_id: str,
+) -> None:
+    """Invalid ids never reach Google, which would reject them itself."""
+    result = provider.create_event(_event(event_id))
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.INVALID_ARGUMENT
+    assert "base32hex" in result.error.message
+    service.events.return_value.insert.assert_not_called()
+
+
+def test_update_rejects_ids_google_would_reject(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Updates validate the id before issuing a patch."""
+    result = provider.update_event(_event("event-1"))
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.INVALID_ARGUMENT
+    service.events.return_value.patch.assert_not_called()
+
+
+def test_generate_event_id_satisfies_google_constraints() -> None:
+    """The helper returns a base32hex id within Google's length bounds."""
+    event_id = generate_event_id()
+
+    assert 5 <= len(event_id) <= 1024
+    assert all(
+        character in "0123456789abcdefghijklmnopqrstuv" for character in event_id
+    )
+
+
 def test_delete_calls_google_and_returns_unit(
     provider: GoogleCalendarProvider,
     service: Mock,
@@ -200,13 +243,13 @@ def test_delete_calls_google_and_returns_unit(
     delete = service.events.return_value.delete
     delete.return_value.execute.return_value = None
 
-    result = provider.delete_event("event-1")
+    result = provider.delete_event("event1")
 
     assert result.is_ok
     assert result.value is None
     assert delete.call_args.kwargs == {
         "calendarId": "primary",
-        "eventId": "event-1",
+        "eventId": "event1",
     }
 
 
@@ -223,7 +266,7 @@ def test_get_maps_private_properties_only(
     )
     service.events.return_value.get.return_value.execute.return_value = resource
 
-    result = provider.get_event("event-1")
+    result = provider.get_event("event1")
 
     event = _loaded_event(result)
     assert event.extended_properties == {"color": "blue"}
@@ -240,7 +283,7 @@ def test_get_maps_a_timed_event_without_a_description_or_recurrence(
     resource.pop("extendedProperties")
     service.events.return_value.get.return_value.execute.return_value = resource
 
-    result = _loaded_event(provider.get_event("event-1"))
+    result = _loaded_event(provider.get_event("event1"))
 
     assert result.description is None
     assert result.recurrence is None
@@ -484,7 +527,7 @@ def test_invalid_timed_payload_is_reported(
     resource = _resource(start={"dateTime": "not-a-time", "timeZone": "UTC"})
     service.events.return_value.get.return_value.execute.return_value = resource
 
-    result = provider.get_event("event-1")
+    result = provider.get_event("event1")
 
     assert result.error is not None
     assert result.error.code is ErrorCode.INVALID_EVENT
