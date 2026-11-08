@@ -4,12 +4,13 @@ A calendar app to track things easier
 
 ## Status
 
-The backend foundations are implemented; the client has not started.
+The backend foundations and the FastAPI calendar API are implemented; the
+client has not started.
 
 - **Backend**: domain event model, SQLite cache, durable retry queue, Google
-  Calendar provider (list/create/patch/delete), OAuth credential helper, and a
-  write-through sync service. The FastAPI app currently exposes only `/health`;
-  the calendar API endpoints are still planned.
+  Calendar provider (list/create/patch/delete), OAuth credential helper, a
+  write-through sync service, and a FastAPI app exposing `/health`, the
+  `/events` CRUD routes, and the `/sync` route behind bearer-token auth.
 - **Client**: not started.
 - **Tests**: backend unit tests use an in-memory fake provider and never call
   Google or touch a real calendar.
@@ -47,6 +48,22 @@ Copy the printed `GOOGLE_REFRESH_TOKEN` into `.env`. The helper requests only
 `https://www.googleapis.com/auth/calendar.events` and does not use a public web
 redirect.
 
+## Backend API
+
+The FastAPI backend serves the calendar API:
+
+- `GET /health` (unauthenticated)
+- `GET /events`, `GET /events/{event_id}`, `POST /events`, `PATCH /events/{event_id}`,
+  `DELETE /events/{event_id}`, and `POST /sync` (bearer-token authenticated)
+
+Protected endpoints expect an `Authorization: Bearer <BACKEND_API_TOKEN>` header.
+
+Failures are returned as structured JSON error bodies:
+
+```json
+{"error": {"code": "not_found", "message": "event was not found"}}
+```
+
 ## Known limitations
 
 - All-day events are not supported yet. `list_events` skips them and `get_event`
@@ -61,7 +78,6 @@ redirect.
 
 ## Planned
 
-- FastAPI endpoints for the calendar/scheduling API
 - Kivy client
 - Docker Compose deployment
 - CI/CD via GitHub Actions
