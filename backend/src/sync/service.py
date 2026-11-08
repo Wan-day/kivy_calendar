@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from cache.repository import EventRepository
-from core.errors import Error, ErrorCode, Result
+from core.errors import Error, ErrorCode, Result, is_retryable
 from domain.event import Event
 from google_calendar.provider import CalendarProvider
 from retry.queue import RetryJob, RetryQueue
@@ -247,7 +247,14 @@ class SyncService:
         payload: dict[str, Any],
         failure: Error,
     ) -> Result[T]:
-        """Queue a failed provider write and return the original failure."""
+        """Queue a failed provider write and return the original failure.
+
+        Only transient upstream failures are queued.  Permanent failures such
+        as an invalid request, a missing event, or a conflict are returned
+        immediately because replaying them cannot succeed.
+        """
+        if not is_retryable(failure):
+            return Result.fail(failure.code, failure.message)
         queued = self._retry_queue.enqueue(operation, payload)
         if queued.error is not None:
             return Result.fail(

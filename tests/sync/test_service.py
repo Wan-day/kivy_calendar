@@ -135,6 +135,49 @@ def test_create_failure_is_queued_and_not_cached(
     assert jobs[0].payload == {"event": event.model_dump(mode="json")}
 
 
+def test_permanent_create_failure_is_not_queued(
+    service: SyncService,
+    provider: FakeCalendarProvider,
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """An invalid create cannot succeed later, so it is not retried."""
+    event = _event()
+    provider.fail_next(
+        "create_event",
+        code=ErrorCode.INVALID_ARGUMENT,
+        message="invalid event",
+    )
+
+    result = service.create_event(event)
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.INVALID_ARGUMENT
+    assert _cached(repository, event.id) is None
+    assert _jobs(retry_queue.list_due()) == []
+
+
+def test_create_conflict_is_not_queued(
+    service: SyncService,
+    provider: FakeCalendarProvider,
+    retry_queue: RetryQueue,
+) -> None:
+    """A 409 conflict is permanent and must not be replayed forever."""
+    event = _event()
+    provider.fail_next(
+        "create_event",
+        code=ErrorCode.ALREADY_EXISTS,
+        message="event already exists",
+    )
+
+    result = service.create_event(event)
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.ALREADY_EXISTS
+    assert _jobs(retry_queue.list_due()) == []
+
+
+
 def test_update_writes_to_the_provider_before_refreshing_the_cache(
     service: SyncService,
     provider: FakeCalendarProvider,
@@ -213,6 +256,31 @@ def test_delete_failure_keeps_the_event_and_queues_a_retry(
     assert len(jobs) == 1
     assert jobs[0].operation == DELETE_OPERATION
     assert jobs[0].payload == {"event_id": event.id}
+
+
+def test_delete_of_a_missing_event_is_not_queued(
+    service: SyncService,
+    retry_queue: RetryQueue,
+) -> None:
+    """Deleting an event Google does not have is a permanent failure."""
+    result = service.delete_event("missing")
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.NOT_FOUND
+    assert _jobs(retry_queue.list_due()) == []
+
+
+def test_update_of_a_missing_event_is_not_queued(
+    service: SyncService,
+    retry_queue: RetryQueue,
+) -> None:
+    """Updating an unknown event cannot succeed by replaying it."""
+    result = service.update_event(_event("missing"))
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.NOT_FOUND
+    assert _jobs(retry_queue.list_due()) == []
+
 
 
 def test_sync_from_google_rebuilds_the_whole_cache(

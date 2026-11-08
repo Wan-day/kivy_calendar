@@ -56,3 +56,17 @@ class Result[T]:
     def is_error(self) -> bool:
         """Whether the operation failed."""
         return self.error is not None
+
+
+RETRYABLE_ERROR_CODES: frozenset[ErrorCode] = frozenset({ErrorCode.UPSTREAM_ERROR})
+
+
+def is_retryable(error: Error) -> bool:
+    """Whether an operation that failed with ``error`` may succeed later.
+
+    Only transient upstream failures (offline, timeouts, rate limits, 5xx) are
+    retryable.  Invalid requests, missing events, and conflicts are permanent:
+    replaying them cannot change the outcome, so they are never queued.
+    """
+    return error.code in RETRYABLE_ERROR_CODES
+
