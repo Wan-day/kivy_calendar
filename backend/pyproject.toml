@@ -7,6 +7,9 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "pydantic",
+    "google-api-python-client",
+    "google-auth",
+    "google-auth-oauthlib",
 ]
 
 [build-system]
