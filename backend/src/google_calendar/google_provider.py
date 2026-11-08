@@ -1,0 +1,438 @@
+"""The real Google Calendar provider.
+
+This adapter implements the :class:`~google_calendar.provider.CalendarProvider`
+contract on top of the Google Calendar v3 API.  It is deliberately the only
+module that knows Google's payload shape: the domain :class:`~domain.event.Event`
+is mapped to ``summary``, ``description``, ``start``/``end``, ``recurrence``,
+the client-generated id, and ``extendedProperties.private``.
+
+Only private extended properties are round-tripped.  Google also exposes shared
+and private properties to different audiences; the backend treats its own
+metadata as private so other apps cannot overwrite it.  Google limits private
+properties to roughly 300 entries, with keys up to 44 characters and values up
+to 1024 characters; callers should keep metadata small.
+
+All-day events are not supported yet.  The domain model always carries timed
+values, so :meth:`GoogleCalendarProvider.list_events` skips all-day entries and
+:meth:`GoogleCalendarProvider.get_event` reports a clear ``INVALID_EVENT``
+error instead of crashing.  Timed events must carry an explicit IANA time zone
+name in Google's ``timeZone`` field.
+
+Expected failures are mapped to :class:`~core.errors.Result` values:
+
+===========  =========================================
+HTTP status  Error code
+===========  =========================================
+400          ``INVALID_ARGUMENT``
+404 / 410    ``NOT_FOUND``
+409          ``ALREADY_EXISTS``
+429 / 5xx    ``UPSTREAM_ERROR``
+other        ``UPSTREAM_ERROR``
+===========  =========================================
+
+Network timeouts and connection failures also become ``UPSTREAM_ERROR``.
+Operational exceptions never escape the provider.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build  # type: ignore[import-untyped]
+from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
+
+from core.errors import Error, ErrorCode, Result
+from domain.event import Event
+
+DEFAULT_CALENDAR_ID = "primary"
+MAX_RESULTS = 2500
+
+
+class GoogleCalendarProvider:
+    """A :class:`~google_calendar.provider.CalendarProvider` backed by Google."""
+
+    def __init__(self, service: Any, calendar_id: str = DEFAULT_CALENDAR_ID) -> None:
+        if not calendar_id.strip():
+            raise ValueError("calendar_id must not be blank")
+        self._service = service
+        self._calendar_id = calendar_id
+
+    @classmethod
+    def from_credentials(
+        cls,
+        credentials: Credentials,
+        calendar_id: str = DEFAULT_CALENDAR_ID,
+    ) -> Result[GoogleCalendarProvider]:
+        """Build a provider from OAuth credentials.
+
+        The discovery client is created once and reused for every request.
+        Service-construction failures are returned as ``UPSTREAM_ERROR``.
+        """
+        if not calendar_id.strip():
+            return Result.fail(
+                ErrorCode.INVALID_ARGUMENT,
+                "calendar_id must not be blank",
+            )
+        try:
+            service = build(
+                "calendar",
+                "v3",
+                credentials=credentials,
+                cache_discovery=False,
+            )
+        except Exception as exc:
+            return Result.fail(
+                ErrorCode.UPSTREAM_ERROR,
+                f"could not build the Google Calendar service: {exc}",
+            )
+        return Result.ok(cls(service, calendar_id))
+
+    def create_event(self, event: Event) -> Result[Event]:
+        """Insert ``event`` with its client-generated id."""
+        request = self._service.events().insert(
+            calendarId=self._calendar_id,
+            body=_event_to_payload(event),
+        )
+        return self._event_request(request)
+
+    def update_event(self, event: Event) -> Result[Event]:
+        """Replace the upstream event that has the same id."""
+        request = self._service.events().update(
+            calendarId=self._calendar_id,
+            eventId=event.id,
+            body=_event_to_payload(event),
+        )
+        return self._event_request(request)
+
+    def delete_event(self, event_id: str) -> Result[None]:
+        """Delete the upstream event, reporting a missing event as an error."""
+        request = self._service.events().delete(
+            calendarId=self._calendar_id,
+            eventId=event_id,
+        )
+        response = self._execute(request)
+        if response.error is not None:
+            return Result.fail(response.error.code, response.error.message)
+        return Result.ok(None)
+
+    def get_event(self, event_id: str) -> Result[Event | None]:
+        """Return the upstream event, or ``None`` when Google does not have it."""
+        request = self._service.events().get(
+            calendarId=self._calendar_id,
+            eventId=event_id,
+        )
+        response = self._execute(request)
+        if response.error is not None:
+            if response.error.code is ErrorCode.NOT_FOUND:
+                return Result.ok(None)
+            return Result.fail(response.error.code, response.error.message)
+
+        mapped = _event_from_resource(response.value)
+        if mapped.error is not None:
+            return Result.fail(mapped.error.code, mapped.error.message)
+        return Result.ok(mapped.value)
+
+    def list_events(self) -> Result[list[Event]]:
+        """Return every timed event, following Google's pagination tokens."""
+        events: list[Event] = []
+        page_token: str | None = None
+        while True:
+            query: dict[str, Any] = {
+                "calendarId": self._calendar_id,
+                "maxResults": MAX_RESULTS,
+                "singleEvents": False,
+                "showDeleted": False,
+            }
+            if page_token is not None:
+                query["pageToken"] = page_token
+            request = self._service.events().list(**query)
+            response = self._execute(request)
+            if response.error is not None:
+                return Result.fail(response.error.code, response.error.message)
+
+            items = _items_from_response(response.value)
+            if items.error is not None:
+                return Result.fail(items.error.code, items.error.message)
+            for item in items.value or []:
+                if _is_all_day_resource(item):
+                    continue
+                mapped = _event_from_resource(item)
+                if mapped.error is not None:
+                    return Result.fail(mapped.error.code, mapped.error.message)
+                if mapped.value is not None:
+                    events.append(mapped.value)
+
+            page_token = _next_page_token(response.value)
+            if page_token is None:
+                break
+        return Result.ok(events)
+
+    def _event_request(self, request: Any) -> Result[Event]:
+        """Execute a request whose response is a Google event resource."""
+        response = self._execute(request)
+        if response.error is not None:
+            return Result.fail(response.error.code, response.error.message)
+        return _event_from_resource(response.value)
+
+    def _execute(self, request: Any) -> Result[Any]:
+        """Execute one Google request, mapping every failure to a Result."""
+        try:
+            response: Any = request.execute()
+        except Exception as exc:
+            failure = _error_from_exception(exc)
+            return Result.fail(failure.code, failure.message)
+        return Result.ok(response)
+
+
+def _event_to_payload(event: Event) -> dict[str, Any]:
+    """Map the domain event onto a Google Calendar ``events`` payload."""
+    payload: dict[str, Any] = {
+        "id": event.id,
+        "summary": event.summary,
+        "start": {
+            "dateTime": event.start.isoformat(),
+            "timeZone": event.start_timezone,
+        },
+        "end": {
+            "dateTime": event.end.isoformat(),
+            "timeZone": event.end_timezone,
+        },
+        "extendedProperties": {"private": dict(event.extended_properties)},
+    }
+    if event.description is not None:
+        payload["description"] = event.description
+    if event.recurrence is not None:
+        payload["recurrence"] = list(event.recurrence)
+    return payload
+
+
+def _event_from_resource(raw: object) -> Result[Event]:
+    """Map a Google event resource back onto the domain model."""
+    if not isinstance(raw, dict):
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            "Google Calendar returned an event that is not an object",
+        )
+    if _is_all_day_resource(raw):
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            "all-day events are not supported by this backend yet",
+        )
+
+    event_id = raw.get("id")
+    if not isinstance(event_id, str) or not event_id.strip():
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            "Google Calendar returned an event without an id",
+        )
+
+    summary = raw.get("summary", "")
+    if summary is None:
+        summary = ""
+    if not isinstance(summary, str):
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"event {event_id!r} has an invalid summary",
+        )
+
+    description = raw.get("description")
+    if description is not None and not isinstance(description, str):
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"event {event_id!r} has an invalid description",
+        )
+
+    recurrence = raw.get("recurrence")
+    if recurrence is not None and (
+        not isinstance(recurrence, list)
+        or any(not isinstance(rule, str) for rule in recurrence)
+    ):
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"event {event_id!r} has invalid recurrence rules",
+        )
+
+    extended_properties = raw.get("extendedProperties")
+    private_properties: dict[str, str] = {}
+    if extended_properties is not None:
+        if not isinstance(extended_properties, dict):
+            return Result.fail(
+                ErrorCode.INVALID_EVENT,
+                f"event {event_id!r} has invalid extended properties",
+            )
+        private = extended_properties.get("private", {})
+        if not isinstance(private, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in private.items()
+        ):
+            return Result.fail(
+                ErrorCode.INVALID_EVENT,
+                f"event {event_id!r} has invalid private extended properties",
+            )
+        private_properties = dict(private)
+
+    start = _resource_time(raw.get("start"), "start")
+    if start.error is not None:
+        return Result.fail(start.error.code, start.error.message)
+    end = _resource_time(raw.get("end"), "end")
+    if end.error is not None:
+        return Result.fail(end.error.code, end.error.message)
+    if start.value is None or end.value is None:
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"event {event_id!r} is missing its start or end time",
+        )
+    start_time, start_timezone = start.value
+    end_time, end_timezone = end.value
+
+    try:
+        return Result.ok(
+            Event(
+                id=event_id,
+                summary=summary,
+                description=description,
+                start=start_time,
+                end=end_time,
+                start_timezone=start_timezone,
+                end_timezone=end_timezone,
+                recurrence=recurrence,
+                extended_properties=private_properties,
+            )
+        )
+    except ValueError as exc:
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"Google Calendar returned an invalid event {event_id!r}: {exc}",
+        )
+
+
+def _resource_time(
+    raw: object,
+    field: str,
+) -> Result[tuple[datetime, str]]:
+    """Extract a timed value and its IANA zone from ``start`` or ``end``."""
+    if not isinstance(raw, dict):
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"Google Calendar event is missing a valid {field}",
+        )
+    date_time = raw.get("dateTime")
+    if not isinstance(date_time, str) or not date_time.strip():
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"Google Calendar event is missing a timed {field}",
+        )
+
+    text = date_time.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"Google Calendar event has an invalid {field} time",
+        )
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"Google Calendar event has a naive {field} time",
+        )
+
+    timezone = raw.get("timeZone")
+    if not isinstance(timezone, str) or not timezone.strip():
+        zone_key = getattr(parsed.tzinfo, "key", None)
+        if not isinstance(zone_key, str) or not zone_key:
+            return Result.fail(
+                ErrorCode.INVALID_EVENT,
+                f"Google Calendar event is missing the IANA zone for {field}",
+            )
+        timezone = zone_key
+    return Result.ok((parsed, timezone.strip()))
+
+
+def _items_from_response(raw: object) -> Result[list[object]]:
+    """Return the ``items`` list from an ``events.list`` response."""
+    if not isinstance(raw, dict):
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            "Google Calendar returned an invalid event list",
+        )
+    items = raw.get("items", [])
+    if not isinstance(items, list):
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            "Google Calendar returned an invalid event list",
+        )
+    return Result.ok(items)
+
+
+def _next_page_token(raw: object) -> str | None:
+    """Return a non-blank pagination token, if the response has one."""
+    if not isinstance(raw, dict):
+        return None
+    token = raw.get("nextPageToken")
+    if isinstance(token, str) and token.strip():
+        return token
+    return None
+
+
+def _is_all_day_resource(raw: object) -> bool:
+    """Whether a resource uses ``date`` instead of ``dateTime``."""
+    if not isinstance(raw, dict):
+        return False
+    for field in ("start", "end"):
+        value = raw.get(field)
+        if (
+            isinstance(value, dict)
+            and "date" in value
+            and "dateTime" not in value
+        ):
+            return True
+    return False
+
+
+def _error_from_exception(exc: BaseException) -> Error:
+    """Map an ``HttpError`` or network failure onto a stable error code."""
+    if isinstance(exc, HttpError):
+        status = _http_status(exc)
+        return Error(_code_for_status(status), _http_error_message(status, exc))
+    return Error(
+        ErrorCode.UPSTREAM_ERROR,
+        f"Google Calendar request failed: {exc}",
+    )
+
+
+def _http_status(error: HttpError) -> int | None:
+    """Read the HTTP status from an ``HttpError`` defensively."""
+    status = getattr(error, "status_code", None)
+    if isinstance(status, int):
+        return status
+    response = getattr(error, "resp", None)
+    status = getattr(response, "status", None)
+    return status if isinstance(status, int) else None
+
+
+def _code_for_status(status: int | None) -> ErrorCode:
+    """Classify an HTTP status as a permanent or retryable provider error."""
+    match status:
+        case 400:
+            return ErrorCode.INVALID_ARGUMENT
+        case 404 | 410:
+            return ErrorCode.NOT_FOUND
+        case 409:
+            return ErrorCode.ALREADY_EXISTS
+        case _:
+            # 429, 5xx, and unknown statuses are transient from the caller's
+            # point of view; retrying is safe because creates use a client id.
+            return ErrorCode.UPSTREAM_ERROR
+
+
+def _http_error_message(status: int | None, error: HttpError) -> str:
+    """Format a Google HTTP error without assuming its payload shape."""
+    reason = str(error)
+    if status is None:
+        return f"Google Calendar request failed: {reason}"
+    return f"Google Calendar request failed with HTTP {status}: {reason}"
