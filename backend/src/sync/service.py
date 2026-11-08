@@ -241,19 +241,25 @@ class SyncService:
         The event id is client-generated, so an earlier attempt may have arrived
         before the worker recorded success.  Google's copy is authoritative:
         fetch and cache it rather than the local queued payload.  If the fetch
-        fails the job stays claimed for the next reclaim cycle and the fetch
-        error is returned without touching the cache.
+        fails or finds nothing the failure is recorded on the job so the queue
+        can back off and eventually stop at ``max_attempts`` instead of leaving
+        the job ``in_progress`` forever.
         """
         existing = self._provider.get_event(event.id)
         if existing.error is not None:
-            return Result.fail(existing.error.code, existing.error.message)
+            return self._retry_queue.fail(
+                job.id,
+                _describe_error(existing.error),
+                now=now,
+            )
 
         confirmed = existing.value
         if confirmed is None:
-            return Result.fail(
-                ErrorCode.NOT_FOUND,
+            return self._retry_queue.fail(
+                job.id,
                 f"event {event.id!r} was reported as existing but could not "
                 "be fetched from Google",
+                now=now,
             )
 
         self._cache_event(confirmed)

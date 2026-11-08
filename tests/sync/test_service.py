@@ -90,6 +90,14 @@ class _FailingCompleteQueue(RetryQueue):
         return super().complete(job_id, now=now)
 
 
+class _MissingAfterConflictProvider(FakeCalendarProvider):
+    """A provider that reports a conflict but never returns the event."""
+
+    def get_event(self, event_id: str) -> Result[Event | None]:
+        self.calls.append((ProviderOperation.GET, event_id))
+        return Result.ok(None)
+
+
 @pytest.fixture
 def provider() -> FakeCalendarProvider:
     """Return an empty in-memory calendar provider."""
@@ -641,13 +649,13 @@ def test_create_retry_caches_the_provider_state_on_already_exists(
     assert _cached(repository, local.id) == remote
 
 
-def test_create_retry_does_not_cache_when_the_provider_fetch_fails(
+def test_create_retry_backs_off_when_the_provider_fetch_fails(
     service: SyncService,
     provider: FakeCalendarProvider,
     repository: EventRepository,
     retry_queue: RetryQueue,
 ) -> None:
-    """A failed recovery fetch leaves the cache alone and reports the error."""
+    """A failed recovery fetch is recorded and retried later, not left claimed."""
     local = _event(summary="Queued local state")
     provider.fail_next("create_event", message="connection dropped")
     assert service.create_event(local).is_error
@@ -656,13 +664,46 @@ def test_create_retry_does_not_cache_when_the_provider_fetch_fails(
     assert provider.create_event(remote).is_ok
     provider.fail_next("get_event", message="still offline")
 
-    result = service.process_due_retries()
+    processed = _jobs(service.process_due_retries())
 
-    assert result.error is not None
-    assert result.error.code is ErrorCode.UPSTREAM_ERROR
-    assert "still offline" in result.error.message
+    assert len(processed) == 1
+    assert processed[0].id == queued.id
+    assert processed[0].status is RetryStatus.PENDING
+    assert processed[0].attempts == 1
+    assert processed[0].last_error is not None
+    assert "still offline" in processed[0].last_error
     assert _cached(repository, local.id) is None
-    assert _job(retry_queue.get(queued.id)).status is RetryStatus.IN_PROGRESS
+
+
+def test_create_retry_recovery_stops_at_max_attempts(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A conflict whose event can never be fetched eventually fails for good."""
+    provider = _MissingAfterConflictProvider()
+    service = SyncService(provider, repository, retry_queue)
+    event = _event()
+    provider.fail_next("create_event", message="connection dropped")
+    assert service.create_event(event).is_error
+    assert provider.create_event(event).is_ok
+
+    due = _jobs(retry_queue.list_due())[0].available_at
+    for expected_attempt in range(1, 6):
+        processed = _jobs(service.process_due_retries(now=due))
+
+        assert len(processed) == 1
+        job = processed[0]
+        assert job.attempts == expected_attempt
+        if expected_attempt < 5:
+            assert job.status is RetryStatus.PENDING
+            assert job.available_at > due
+            due = job.available_at
+        else:
+            assert job.status is RetryStatus.FAILED
+            assert job.last_error is not None
+            assert "could not be fetched" in job.last_error
+
+    assert _jobs(retry_queue.list_due(now=due + timedelta(days=1))) == []
 
 
 def test_retry_operation_names_reuse_the_provider_enum() -> None:
