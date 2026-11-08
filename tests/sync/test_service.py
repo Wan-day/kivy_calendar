@@ -9,7 +9,7 @@ from cache.repository import EventRepository
 from core.errors import ErrorCode, Result
 from core.sqlite import Database
 from domain.event import Event
-from google.fake import FakeCalendarProvider
+from google_calendar.fake import FakeCalendarProvider
 from retry.queue import RetryJob, RetryQueue, RetryStatus
 from sync.service import (
     CREATE_OPERATION,

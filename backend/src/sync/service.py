@@ -15,7 +15,7 @@ from typing import Any
 from cache.repository import EventRepository
 from core.errors import Error, ErrorCode, Result
 from domain.event import Event
-from google.provider import CalendarProvider
+from google_calendar.provider import CalendarProvider
 from retry.queue import RetryJob, RetryQueue
 
 CREATE_OPERATION = "create_event"

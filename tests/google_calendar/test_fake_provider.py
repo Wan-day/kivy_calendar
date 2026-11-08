@@ -6,8 +6,8 @@ from zoneinfo import ZoneInfo
 import pytest
 from core.errors import ErrorCode, Result
 from domain.event import Event
-from google.fake import FakeCalendarProvider
-from google.provider import CalendarProvider, ProviderOperation
+from google_calendar.fake import FakeCalendarProvider
+from google_calendar.provider import CalendarProvider, ProviderOperation
 
 BERLIN = ZoneInfo("Europe/Berlin")
 
