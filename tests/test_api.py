@@ -16,6 +16,7 @@ from google_calendar.fake import FakeCalendarProvider
 from google_calendar.provider import ProviderOperation
 from httpx import Response
 from retry.queue import RetryQueue
+from slots.service import SlotService
 from sync.service import SyncService
 
 BERLIN = ZoneInfo("Europe/Berlin")
@@ -100,6 +101,7 @@ def _make_client(
         repository=repository,
         retry_queue=retry_queue,
         sync_service=SyncService(provider=provider, repository=repository, retry_queue=retry_queue),
+        slot_service=SlotService(provider=provider),
     )
     return TestClient(app)
 
@@ -262,6 +264,59 @@ def test_sync_returns_upstream_error_when_provider_fails(
     provider.fail_next(ProviderOperation.LIST, code=ErrorCode.UPSTREAM_ERROR, message="offline")
 
     response = client.post("/sync", headers=_auth_headers())
+
+    assert response.status_code == 503
+    assert _error_code(response) == "upstream_error"
+
+
+def test_free_slots_returns_free_windows(
+    provider: FakeCalendarProvider,
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """Free-slot search skips booked events and returns fitting windows."""
+    provider = FakeCalendarProvider([_event("event-1")])
+    slots_client = _make_client(provider, repository, retry_queue)
+
+    response = slots_client.post(
+        "/slots/free",
+        json={
+            "duration_minutes": 30,
+            "window_start": "2026-11-06T08:00:00+01:00",
+            "window_end": "2026-11-06T18:00:00+01:00",
+            "time_zone": "Europe/Berlin",
+        },
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 200
+    slots = response.json()["slots"]
+    assert len(slots) == 2
+    assert slots[0]["start"] == "2026-11-06T08:00:00+01:00"
+    assert slots[0]["end"] == "2026-11-06T08:30:00+01:00"
+    assert slots[1]["start"] == "2026-11-06T09:30:00+01:00"
+    assert slots[1]["end"] == "2026-11-06T10:00:00+01:00"
+
+
+def test_free_slots_returns_upstream_error_when_provider_fails(
+    provider: FakeCalendarProvider,
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A failed free-slot search maps to a structured upstream error."""
+    provider.fail_next(ProviderOperation.LIST, code=ErrorCode.UPSTREAM_ERROR, message="offline")
+    slots_client = _make_client(provider, repository, retry_queue)
+
+    response = slots_client.post(
+        "/slots/free",
+        json={
+            "duration_minutes": 30,
+            "window_start": "2026-11-06T08:00:00+01:00",
+            "window_end": "2026-11-06T18:00:00+01:00",
+            "time_zone": "Europe/Berlin",
+        },
+        headers=_auth_headers(),
+    )
 
     assert response.status_code == 503
     assert _error_code(response) == "upstream_error"

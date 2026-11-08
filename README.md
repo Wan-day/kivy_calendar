@@ -55,6 +55,8 @@ The FastAPI backend serves the calendar API:
 - `GET /health` (unauthenticated)
 - `GET /events`, `GET /events/{event_id}`, `POST /events`, `PATCH /events/{event_id}`,
   `DELETE /events/{event_id}`, and `POST /sync` (bearer-token authenticated)
+- `POST /slots/free` (bearer-token authenticated) to find windows that fit a
+  requested event duration
 
 Protected endpoints expect an `Authorization: Bearer <BACKEND_API_TOKEN>` header.
 

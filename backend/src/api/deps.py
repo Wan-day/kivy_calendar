@@ -10,6 +10,7 @@ from cache.repository import EventRepository
 from core.config import Settings
 from google_calendar.provider import CalendarProvider
 from retry.queue import RetryQueue
+from slots.service import SlotService
 from sync.service import SyncService
 
 
@@ -34,6 +35,12 @@ def get_retry_queue(request: Request) -> RetryQueue:
     """Return the retry queue from the application state."""
     queue = getattr(request.app.state, "retry_queue")
     return cast(RetryQueue, queue)
+
+
+def get_slot_service(request: Request) -> SlotService:
+    """Return the slot service from the application state."""
+    service = getattr(request.app.state, "slot_service")
+    return cast(SlotService, service)
 
 
 def get_sync_service(request: Request) -> SyncService:
