@@ -20,6 +20,7 @@ class ErrorCode(StrEnum):
     INVALID_STATE = "invalid_state"
     STORAGE_ERROR = "storage_error"
     UPSTREAM_ERROR = "upstream_error"
+    AUTH_ERROR = "auth_error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,3 +57,18 @@ class Result[T]:
     def is_error(self) -> bool:
         """Whether the operation failed."""
         return self.error is not None
+
+
+RETRYABLE_ERROR_CODES: frozenset[ErrorCode] = frozenset({ErrorCode.UPSTREAM_ERROR})
+
+
+def is_retryable(error: Error) -> bool:
+    """Whether an operation that failed with ``error`` may succeed later.
+
+    Only transient upstream failures (offline, timeouts, rate limits, 5xx) are
+    retryable.  Invalid requests, missing events, conflicts, and authentication
+    failures are permanent: replaying them cannot change the outcome, so they
+    are never queued.
+    """
+    return error.code in RETRYABLE_ERROR_CODES
+

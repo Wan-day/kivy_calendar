@@ -426,6 +426,52 @@ class RetryQueue:
 
         return run_in_transaction(self._database, _SCHEMA, operation)
 
+    def fail_permanently(
+        self,
+        job_id: str,
+        error: str,
+        *,
+        now: datetime | None = None,
+    ) -> Result[RetryJob]:
+        """Mark a claimed job as failed without scheduling another attempt.
+
+        This is for non-retryable failures discovered while replaying a job
+        (for example an authentication error): the job is terminal
+        immediately, regardless of its remaining attempt budget.
+        """
+        try:
+            current_time = _as_utc(now if now is not None else datetime.now(UTC))
+        except ValueError as exc:
+            return Result.fail(ErrorCode.INVALID_ARGUMENT, str(exc))
+        current_timestamp = _format_timestamp(current_time)
+
+        def operation(connection: sqlite3.Connection) -> Result[RetryJob]:
+            row = _find_job(connection, job_id)
+            if row is None:
+                return _not_found(job_id)
+            job = _row_to_job(row)
+            if job.status is not RetryStatus.IN_PROGRESS:
+                return _invalid_state(job, "fail permanently")
+
+            connection.execute(
+                "UPDATE retry_jobs "
+                "SET status = ?, last_error = ?, updated_at = ? "
+                "WHERE id = ? AND status = ?",
+                (
+                    RetryStatus.FAILED.value,
+                    error,
+                    current_timestamp,
+                    job_id,
+                    RetryStatus.IN_PROGRESS.value,
+                ),
+            )
+            updated_row = _find_job(connection, job_id)
+            if updated_row is None:
+                return _not_found(job_id)
+            return Result.ok(_row_to_job(updated_row))
+
+        return run_in_transaction(self._database, _SCHEMA, operation)
+
     def _backoff_delay(self, attempts: int) -> timedelta:
         exponent = max(attempts - 1, 0)
         delay = self._base_delay_seconds * (2**exponent)

@@ -196,15 +196,49 @@ def test_fail_caps_backoff_at_the_maximum(queue: RetryQueue) -> None:
         due_at = failure.available_at
 
 
+def test_fail_permanently_marks_a_claimed_job_failed(
+    queue: RetryQueue,
+) -> None:
+    """A non-retryable replay failure is terminal on the first attempt."""
+    queued = _job(queue.enqueue("create_event", now=NOW))
+    _jobs(queue.claim_due(now=NOW))
+
+    failed = _job(
+        queue.fail_permanently(queued.id, "auth_error: token revoked", now=NOW)
+    )
+
+    assert failed.status is RetryStatus.FAILED
+    assert failed.attempts == 1
+    assert failed.last_error == "auth_error: token revoked"
+    assert failed.available_at == queued.available_at
+    assert failed.completed_at is None
+    assert _jobs(queue.list_due(now=NOW + timedelta(days=1))) == []
+
+    cannot_complete = queue.complete(queued.id, now=NOW + timedelta(days=1))
+    assert cannot_complete.error is not None
+    assert cannot_complete.error.code is ErrorCode.INVALID_STATE
+
+
+def test_fail_permanently_requires_a_claimed_job(queue: RetryQueue) -> None:
+    """A pending job cannot be failed permanently behind a worker's back."""
+    queued = _job(queue.enqueue("create_event", now=NOW))
+
+    result = queue.fail_permanently(queued.id, "auth_error", now=NOW)
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.INVALID_STATE
+
+
 def test_failed_transition_for_unknown_job_is_not_found(
     queue: RetryQueue,
 ) -> None:
     """Missing jobs are returned as errors, not exceptions."""
     complete = queue.complete("missing", now=NOW)
     fail = queue.fail("missing", "offline", now=NOW)
+    fail_permanently = queue.fail_permanently("missing", "auth_error", now=NOW)
     get = queue.get("missing")
 
-    for result in (complete, fail, get):
+    for result in (complete, fail, fail_permanently, get):
         assert result.error is not None
         assert result.error.code is ErrorCode.NOT_FOUND
 

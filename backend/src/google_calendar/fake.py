@@ -15,11 +15,11 @@ from collections.abc import Iterable
 
 from core.errors import Error, ErrorCode, Result
 from domain.event import Event
-from google.provider import ProviderOperation
+from google_calendar.provider import ProviderOperation
 
 
 class FakeCalendarProvider:
-    """An in-memory :class:`~google.provider.CalendarProvider` implementation."""
+    """An in-memory :class:`~google_calendar.provider.CalendarProvider` fake."""
 
     def __init__(self, events: Iterable[Event] = ()) -> None:
         self._events: dict[str, Event] = {

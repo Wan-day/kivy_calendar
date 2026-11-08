@@ -1,6 +1,6 @@
 """Tests for the shared error-result convention."""
 
-from core.errors import ErrorCode, Result
+from core.errors import Error, ErrorCode, Result, is_retryable
 
 
 def test_result_ok_carries_value() -> None:
@@ -36,3 +36,21 @@ def test_result_fail_defaults_to_an_empty_message() -> None:
 def test_upstream_error_code_is_available() -> None:
     """Upstream calendar failures have a stable machine-readable code."""
     assert ErrorCode.UPSTREAM_ERROR == "upstream_error"
+
+
+def test_only_transient_upstream_errors_are_retryable() -> None:
+    """Retrying is reserved for failures that may heal on their own."""
+    assert is_retryable(Error(ErrorCode.UPSTREAM_ERROR))
+
+    permanent_codes = [
+        ErrorCode.INVALID_ARGUMENT,
+        ErrorCode.INVALID_EVENT,
+        ErrorCode.NOT_FOUND,
+        ErrorCode.ALREADY_EXISTS,
+        ErrorCode.INVALID_STATE,
+        ErrorCode.STORAGE_ERROR,
+        ErrorCode.AUTH_ERROR,
+    ]
+    for code in permanent_codes:
+        assert not is_retryable(Error(code))
+

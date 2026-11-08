@@ -45,7 +45,11 @@ class CalendarProvider(Protocol):
         ...
 
     def update_event(self, event: Event) -> Result[Event]:
-        """Replace the upstream event with the same id and return the saved copy."""
+        """Patch the upstream event with the same id and return the saved copy.
+
+        Implementations should preserve fields they do not model, so update is
+        a partial write rather than a destructive replace.
+        """
         ...
 
     def delete_event(self, event_id: str) -> Result[None]:
