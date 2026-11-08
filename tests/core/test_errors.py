@@ -31,3 +31,8 @@ def test_result_fail_defaults_to_an_empty_message() -> None:
 
     assert result.error is not None
     assert result.error.message == ""
+
+
+def test_upstream_error_code_is_available() -> None:
+    """Upstream calendar failures have a stable machine-readable code."""
+    assert ErrorCode.UPSTREAM_ERROR == "upstream_error"

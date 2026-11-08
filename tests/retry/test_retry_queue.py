@@ -230,3 +230,81 @@ def test_jobs_survive_a_queue_restart(tmp_path: Path) -> None:
     assert loaded.payload == {"event_id": "e1"}
     assert loaded.status is RetryStatus.PENDING
     assert loaded.available_at == NOW
+
+
+def test_reclaim_stale_returns_crashed_jobs_to_pending(
+    queue: RetryQueue,
+) -> None:
+    """A job claimed by a crashed worker becomes due again."""
+    queued = _job(queue.enqueue("create_event", now=NOW))
+    _jobs(queue.claim_due(now=NOW))
+    reclaimed_at = NOW + timedelta(minutes=10)
+
+    result = queue.reclaim_stale(timedelta(minutes=5), now=reclaimed_at)
+
+    assert result.is_ok
+    assert result.value is not None
+    assert len(result.value) == 1
+    reclaimed = result.value[0]
+    assert reclaimed.id == queued.id
+    assert reclaimed.status is RetryStatus.PENDING
+    assert reclaimed.attempts == 1
+    assert reclaimed.claimed_at is None
+    assert reclaimed.available_at == reclaimed_at
+    assert reclaimed.updated_at == reclaimed_at
+
+
+def test_reclaim_stale_leaves_recent_claims_alone(
+    queue: RetryQueue,
+) -> None:
+    """A job claimed recently may still be running, so it is not reclaimed."""
+    _job(queue.enqueue("create_event", now=NOW))
+    _jobs(queue.claim_due(now=NOW))
+
+    result = queue.reclaim_stale(timedelta(minutes=5), now=NOW + timedelta(minutes=1))
+
+    assert result.is_ok
+    assert result.value == []
+
+
+def test_reclaimed_jobs_can_be_claimed_again(queue: RetryQueue) -> None:
+    """Reclaiming makes the job claimable without resetting attempt history."""
+    queued = _job(queue.enqueue("create_event", now=NOW))
+    _jobs(queue.claim_due(now=NOW))
+    reclaimed_at = NOW + timedelta(minutes=10)
+    _jobs(queue.reclaim_stale(timedelta(minutes=5), now=reclaimed_at))
+
+    claimed = _jobs(queue.claim_due(now=reclaimed_at))
+
+    assert len(claimed) == 1
+    assert claimed[0].id == queued.id
+    assert claimed[0].status is RetryStatus.IN_PROGRESS
+    assert claimed[0].attempts == 2
+    assert claimed[0].claimed_at == reclaimed_at
+
+
+def test_reclaim_stale_ignores_jobs_that_are_not_in_progress(
+    queue: RetryQueue,
+) -> None:
+    """Only jobs abandoned after claiming are reclaimed."""
+    pending = _job(queue.enqueue("pending", now=NOW))
+    completed = _job(queue.enqueue("completed", now=NOW))
+    _jobs(queue.claim_due(now=NOW, limit=2))
+    _job(queue.complete(completed.id, now=NOW))
+
+    result = queue.reclaim_stale(timedelta(seconds=1), now=NOW + timedelta(hours=1))
+
+    assert result.is_ok
+    assert result.value is not None
+    assert [job.id for job in result.value] == [pending.id]
+    assert _job(queue.get(completed.id)).status is RetryStatus.COMPLETED
+
+
+def test_reclaim_stale_rejects_invalid_arguments(queue: RetryQueue) -> None:
+    """Bad reclaim windows and naive timestamps produce error results."""
+    zero = queue.reclaim_stale(timedelta(0), now=NOW)
+    naive = queue.reclaim_stale(timedelta(minutes=1), now=datetime(2026, 11, 6, 12, 0))
+
+    for result in (zero, naive):
+        assert result.error is not None
+        assert result.error.code is ErrorCode.INVALID_ARGUMENT
