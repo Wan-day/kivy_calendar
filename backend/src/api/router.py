@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, Response
 
 from api.auth import verify_api_key
-from api.deps import get_repository, get_sync_service
+from api.deps import get_repository, get_slot_service, get_sync_service
 from api.errors import ApiError, error_status
-from api.schemas import SyncResponse
+from api.schemas import FreeSlot, FreeSlotRequest, FreeSlotsResponse, SyncResponse
 from cache.repository import EventRepository
 from core.errors import ErrorCode
 from domain.event import Event
+from slots.service import SlotService
 from sync.service import SyncService
 
 api_router = APIRouter()
@@ -153,3 +156,28 @@ def sync(service: SyncService = Depends(get_sync_service)) -> SyncResponse:
         raise ApiError(error_status(error), error.code, error.message)
     count = result.value if result.value is not None else 0
     return SyncResponse(synced=count)
+
+
+@api_router.post(
+    "/slots/free",
+    response_model=FreeSlotsResponse,
+    dependencies=[Depends(verify_api_key)],
+)
+def free_slots(
+    request: FreeSlotRequest,
+    service: SlotService = Depends(get_slot_service),
+) -> FreeSlotsResponse:
+    """Return free windows that fit a new event."""
+    result = service.find_free_slots(
+        duration=timedelta(minutes=request.duration_minutes),
+        window_start=request.window_start,
+        window_end=request.window_end,
+        time_zone=request.time_zone,
+    )
+    if result.is_error:
+        error = result.error
+        if error is None:
+            raise RuntimeError("find free slots failed without an error")
+        raise ApiError(error_status(error), error.code, error.message)
+    slots = [FreeSlot(start=slot.start, end=slot.end) for slot in result.value or []]
+    return FreeSlotsResponse(slots=slots)

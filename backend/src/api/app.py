@@ -21,6 +21,7 @@ from google_calendar.auth import CALENDAR_EVENTS_SCOPE, build_credentials
 from google_calendar.google_provider import GoogleCalendarProvider
 from google_calendar.provider import CalendarProvider
 from retry.queue import RetryQueue
+from slots.service import SlotService
 from sync.service import SyncService
 
 
@@ -49,6 +50,7 @@ def create_app(
     repository: EventRepository | None = None,
     retry_queue: RetryQueue | None = None,
     sync_service: SyncService | None = None,
+    slot_service: SlotService | None = None,
 ) -> FastAPI:
     """Create the FastAPI application.
 
@@ -71,12 +73,15 @@ def create_app(
             repository=repository,
             retry_queue=retry_queue,
         )
+    if slot_service is None:
+        slot_service = SlotService(provider=provider)
 
     app.state.settings = resolved_settings
     app.state.provider = provider
     app.state.repository = repository
     app.state.retry_queue = retry_queue
     app.state.sync_service = sync_service
+    app.state.slot_service = slot_service
 
     app.include_router(api_router)
 

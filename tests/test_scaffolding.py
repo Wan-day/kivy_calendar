@@ -3,7 +3,7 @@
 from pathlib import Path
 
 BACKEND_SRC = Path(__file__).resolve().parents[1] / "backend" / "src"
-EXPECTED_MODULES = ("api", "google_calendar", "sync", "cache", "retry")
+EXPECTED_MODULES = ("api", "google_calendar", "sync", "cache", "retry", "slots")
 
 
 def test_backend_scaffolding_modules_exist() -> None:
