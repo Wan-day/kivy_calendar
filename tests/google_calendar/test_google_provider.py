@@ -368,6 +368,20 @@ def test_list_failures_do_not_escape(
     assert result.error.code is ErrorCode.UPSTREAM_ERROR
 
 
+def test_request_construction_failures_do_not_escape(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A broken discovery client is reported instead of raised."""
+    service.events.side_effect = RuntimeError("client is broken")
+
+    result = provider.create_event(_event())
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.UPSTREAM_ERROR
+    assert "client is broken" in result.error.message
+
+
 def test_invalid_timed_payload_is_reported(
     provider: GoogleCalendarProvider,
     service: Mock,

@@ -36,6 +36,7 @@ Operational exceptions never escape the provider.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -91,39 +92,43 @@ class GoogleCalendarProvider:
 
     def create_event(self, event: Event) -> Result[Event]:
         """Insert ``event`` with its client-generated id."""
-        request = self._service.events().insert(
-            calendarId=self._calendar_id,
-            body=_event_to_payload(event),
+        return self._event_request(
+            lambda: self._service.events().insert(
+                calendarId=self._calendar_id,
+                body=_event_to_payload(event),
+            )
         )
-        return self._event_request(request)
 
     def update_event(self, event: Event) -> Result[Event]:
         """Replace the upstream event that has the same id."""
-        request = self._service.events().update(
-            calendarId=self._calendar_id,
-            eventId=event.id,
-            body=_event_to_payload(event),
+        return self._event_request(
+            lambda: self._service.events().update(
+                calendarId=self._calendar_id,
+                eventId=event.id,
+                body=_event_to_payload(event),
+            )
         )
-        return self._event_request(request)
 
     def delete_event(self, event_id: str) -> Result[None]:
         """Delete the upstream event, reporting a missing event as an error."""
-        request = self._service.events().delete(
-            calendarId=self._calendar_id,
-            eventId=event_id,
+        response = self._execute(
+            lambda: self._service.events().delete(
+                calendarId=self._calendar_id,
+                eventId=event_id,
+            )
         )
-        response = self._execute(request)
         if response.error is not None:
             return Result.fail(response.error.code, response.error.message)
         return Result.ok(None)
 
     def get_event(self, event_id: str) -> Result[Event | None]:
         """Return the upstream event, or ``None`` when Google does not have it."""
-        request = self._service.events().get(
-            calendarId=self._calendar_id,
-            eventId=event_id,
+        response = self._execute(
+            lambda: self._service.events().get(
+                calendarId=self._calendar_id,
+                eventId=event_id,
+            )
         )
-        response = self._execute(request)
         if response.error is not None:
             if response.error.code is ErrorCode.NOT_FOUND:
                 return Result.ok(None)
@@ -147,8 +152,9 @@ class GoogleCalendarProvider:
             }
             if page_token is not None:
                 query["pageToken"] = page_token
-            request = self._service.events().list(**query)
-            response = self._execute(request)
+            response = self._execute(
+                lambda: self._service.events().list(**query)
+            )
             if response.error is not None:
                 return Result.fail(response.error.code, response.error.message)
 
@@ -169,17 +175,17 @@ class GoogleCalendarProvider:
                 break
         return Result.ok(events)
 
-    def _event_request(self, request: Any) -> Result[Event]:
+    def _event_request(self, request: Callable[[], Any]) -> Result[Event]:
         """Execute a request whose response is a Google event resource."""
         response = self._execute(request)
         if response.error is not None:
             return Result.fail(response.error.code, response.error.message)
         return _event_from_resource(response.value)
 
-    def _execute(self, request: Any) -> Result[Any]:
-        """Execute one Google request, mapping every failure to a Result."""
+    def _execute(self, request: Callable[[], Any]) -> Result[Any]:
+        """Build and execute one Google request, mapping every failure."""
         try:
-            response: Any = request.execute()
+            response: Any = request().execute()
         except Exception as exc:
             failure = _error_from_exception(exc)
             return Result.fail(failure.code, failure.message)
