@@ -48,6 +48,14 @@ class CalendarEvent:
     extended_properties: dict[str, str] | None = None
 
 
+@dataclass(frozen=True)
+class FreeSlot:
+    """A free time window suggested by the backend."""
+
+    start: datetime
+    end: datetime
+
+
 class BackendClient:
     """Small HTTP client for the backend calendar API."""
 
@@ -106,6 +114,63 @@ class BackendClient:
     def delete_event(self, event_id: str) -> None:
         """Delete an event from the backend calendar."""
         self._request(f"/events/{quote(event_id, safe='')}", method="DELETE")
+
+    def sync(self) -> int:
+        """Ask the backend to rebuild its cache and return the event count."""
+        payload = self._request("/sync", method="POST")
+        if not isinstance(payload, dict):
+            raise BackendError(
+                500,
+                "invalid_response",
+                "backend returned an unexpected sync response",
+            )
+        synced = payload.get("synced")
+        if isinstance(synced, bool) or not isinstance(synced, int):
+            raise BackendError(
+                500,
+                "invalid_response",
+                "backend returned an invalid sync count",
+            )
+        return synced
+
+    def find_free_slots(
+        self,
+        duration_minutes: int,
+        window_start: datetime,
+        window_end: datetime,
+        time_zone: str,
+    ) -> list[FreeSlot]:
+        """Return free windows that fit ``duration_minutes`` in the window."""
+        if window_start.tzinfo is None or window_end.tzinfo is None:
+            raise BackendError(
+                422,
+                "invalid_event",
+                "free-slot window times must include time zone information",
+            )
+        payload = self._request(
+            "/slots/free",
+            method="POST",
+            body={
+                "duration_minutes": duration_minutes,
+                "window_start": window_start.isoformat(),
+                "window_end": window_end.isoformat(),
+                "time_zone": time_zone,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise BackendError(
+                500,
+                "invalid_response",
+                "backend returned an unexpected free-slot response",
+            )
+        slots = payload.get("slots")
+        if not isinstance(slots, list):
+            raise BackendError(
+                500,
+                "invalid_response",
+                "backend returned an unexpected free-slot list",
+            )
+        return [self._free_slot_from_payload(item) for item in slots]
 
     def _request(self, path: str, *, method: str, body: object | None = None) -> Any:
         """Perform a JSON request against the backend and decode the response."""
@@ -204,6 +269,31 @@ class BackendClient:
                 "invalid_event",
                 f"backend event {field} is not a valid datetime: {value}",
             ) from error
+
+    def _free_slot_from_payload(self, payload: object) -> FreeSlot:
+        """Turn a backend free-slot payload into a client free slot."""
+        if not isinstance(payload, dict):
+            raise BackendError(
+                500,
+                "invalid_response",
+                "backend returned an unexpected free slot",
+            )
+        try:
+            start = datetime.fromisoformat(str(payload.get("start") or ""))
+            end = datetime.fromisoformat(str(payload.get("end") or ""))
+        except ValueError as error:
+            raise BackendError(
+                500,
+                "invalid_response",
+                f"backend returned an invalid free slot: {error}",
+            ) from error
+        if start.tzinfo is None or end.tzinfo is None:
+            raise BackendError(
+                500,
+                "invalid_response",
+                "backend free-slot times must include time zone information",
+            )
+        return FreeSlot(start=start, end=end)
 
     @staticmethod
     def _event_payload(event: CalendarEvent) -> dict[str, object]:

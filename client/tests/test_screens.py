@@ -7,7 +7,9 @@ They run headless through the SDL dummy video driver.
 from __future__ import annotations
 
 import os
-from datetime import datetime
+import threading
+from collections.abc import Callable
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -28,6 +30,12 @@ class FakeClient:
         self.created: list[Any] = []
         self.updated: list[Any] = []
         self.deleted: list[str] = []
+        self.sync_calls = 0
+        self.synced = 0
+        self.sync_error: BaseException | None = None
+        self.list_calls = 0
+        self.free_slots: list[Any] = []
+        self.free_slot_requests: list[tuple[int, datetime, datetime, str]] = []
 
     def create_event(self, event: Any) -> Any:
         """Record a create and return the event unchanged."""
@@ -45,7 +53,28 @@ class FakeClient:
 
     def list_events(self) -> list[Any]:
         """Return no events."""
+        self.list_calls += 1
         return []
+
+    def sync(self) -> int:
+        """Record a sync and return the configured count."""
+        self.sync_calls += 1
+        if self.sync_error is not None:
+            raise self.sync_error
+        return self.synced
+
+    def find_free_slots(
+        self,
+        duration_minutes: int,
+        window_start: datetime,
+        window_end: datetime,
+        time_zone: str,
+    ) -> list[Any]:
+        """Record the request and return the configured slots."""
+        self.free_slot_requests.append(
+            (duration_minutes, window_start, window_end, time_zone),
+        )
+        return list(self.free_slots)
 
 
 def _sample_event() -> Any:
@@ -82,6 +111,46 @@ def _make_screens(
     manager.add_widget(main_screen)
     manager.add_widget(add_event_screen)
     return manager, main_screen, add_event_screen
+
+
+FIXED_NOW = datetime(2026, 11, 9, 12, 0, tzinfo=BERLIN)
+
+
+class _FixedDateTime(datetime):
+    """``datetime`` double whose ``now()`` is frozen."""
+
+    @classmethod
+    def now(cls, tz: Any = None) -> datetime:
+        """Return the fixed time, converted to ``tz`` when given."""
+        if tz is None:
+            return FIXED_NOW
+        return FIXED_NOW.astimezone(tz)
+
+
+def _run_inline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run worker threads and scheduled Kivy callbacks immediately."""
+
+    class InlineThread:
+        """Thread double that runs its target synchronously on start."""
+
+        def __init__(
+            self,
+            target: Callable[..., Any],
+            args: tuple[Any, ...] = (),
+            daemon: bool | None = None,
+            **kwargs: Any,
+        ) -> None:
+            self._target = target
+            self._args = args
+
+        def start(self) -> None:
+            """Run the target instead of starting a thread."""
+            self._target(*self._args)
+
+    from kivy.clock import Clock
+
+    monkeypatch.setattr(threading, "Thread", InlineThread)
+    monkeypatch.setattr(Clock, "schedule_once", lambda callback, *_: callback(0))
 
 
 def test_screens_are_reachable_by_name() -> None:
@@ -213,3 +282,131 @@ def test_deleting_sends_the_event_id() -> None:
     add_event_screen._delete_event(client, "event-1")
 
     assert client.deleted == ["event-1"]
+
+
+def test_sync_button_syncs_and_reloads_the_event_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Sync button runs a sync, shows the count and reloads events."""
+    client = FakeClient()
+    client.synced = 3
+    _, main_screen, _ = _make_screens(client)
+    _run_inline(monkeypatch)
+
+    main_screen.sync_button.dispatch("on_press")
+
+    assert client.sync_calls == 1
+    assert client.list_calls == 1
+    assert main_screen.status_label.text == "Synced 3 events"
+    assert not main_screen.sync_button.disabled
+
+
+def test_sync_button_reports_backend_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed sync shows the error and re-enables the button."""
+    from kivy_calendar.api import BackendError
+
+    client = FakeClient()
+    client.sync_error = BackendError(500, "sync_failed", "Google is down")
+    _, main_screen, _ = _make_screens(client)
+    _run_inline(monkeypatch)
+
+    main_screen.sync_button.dispatch("on_press")
+
+    assert "Google is down" in main_screen.status_label.text
+    assert not main_screen.sync_button.disabled
+
+
+def test_suggest_time_fills_the_form_with_the_first_slot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Suggest time asks for the form duration and fills the first slot."""
+    import kivy_calendar.screens.add_event as add_event_module
+    from kivy_calendar.api import FreeSlot
+
+    first = FreeSlot(
+        start=datetime(2026, 11, 12, 9, 0, tzinfo=BERLIN),
+        end=datetime(2026, 11, 12, 9, 30, tzinfo=BERLIN),
+    )
+    second = FreeSlot(
+        start=datetime(2026, 11, 13, 14, 0, tzinfo=BERLIN),
+        end=datetime(2026, 11, 13, 14, 30, tzinfo=BERLIN),
+    )
+    client = FakeClient()
+    client.free_slots = [first, second]
+    _, _, add_event_screen = _make_screens(client)
+    add_event_screen.start.text = "2026-11-09T15:00+01:00"
+    add_event_screen.end.text = "2026-11-09T16:30+01:00"
+    add_event_screen.start_timezone.text = "Europe/Berlin"
+    _run_inline(monkeypatch)
+    monkeypatch.setattr(add_event_module, "datetime", _FixedDateTime)
+
+    add_event_screen.suggest_button.dispatch("on_press")
+
+    assert client.free_slot_requests == [
+        (
+            90,
+            FIXED_NOW,
+            FIXED_NOW + timedelta(days=7),
+            "Europe/Berlin",
+        ),
+    ]
+    assert add_event_screen.start.text == "2026-11-12T09:00+01:00"
+    assert add_event_screen.end.text == "2026-11-12T09:30+01:00"
+    assert add_event_screen.status_label.text == "Suggested a free time."
+    assert not add_event_screen.suggest_button.disabled
+
+
+def test_suggest_time_reports_when_no_slot_is_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty slot list shows the no-slot message and re-enables the button."""
+    import kivy_calendar.screens.add_event as add_event_module
+
+    client = FakeClient()
+    client.free_slots = []
+    _, _, add_event_screen = _make_screens(client)
+    add_event_screen.start.text = "not a datetime"
+    add_event_screen.end.text = "not a datetime"
+    add_event_screen.start_timezone.text = "Europe/Berlin"
+    _run_inline(monkeypatch)
+    monkeypatch.setattr(add_event_module, "datetime", _FixedDateTime)
+
+    add_event_screen.suggest_button.dispatch("on_press")
+
+    assert client.free_slot_requests == [
+        (
+            60,
+            FIXED_NOW,
+            FIXED_NOW + timedelta(days=7),
+            "Europe/Berlin",
+        ),
+    ]
+    assert (
+        add_event_screen.status_label.text
+        == "No free slot found in the next 7 days."
+    )
+    assert not add_event_screen.suggest_button.disabled
+
+
+def test_suggest_time_uses_an_hour_for_mixed_time_zones() -> None:
+    """An offset time mixed with a naive one falls back to an hour."""
+    client = FakeClient()
+    _, _, add_event_screen = _make_screens(client)
+    add_event_screen.start.text = "2026-11-09T15:00+01:00"
+    add_event_screen.end.text = "2026-11-09T16:30"
+
+    assert add_event_screen._duration_minutes() == 60
+
+
+def test_suggest_time_rejects_an_unknown_time_zone() -> None:
+    """An invalid start time zone is reported before any request."""
+    client = FakeClient()
+    _, _, add_event_screen = _make_screens(client)
+    add_event_screen.start_timezone.text = "Mars/Olympus"
+
+    add_event_screen.suggest_button.dispatch("on_press")
+
+    assert "Unknown time zone" in add_event_screen.status_label.text
+    assert client.free_slot_requests == []

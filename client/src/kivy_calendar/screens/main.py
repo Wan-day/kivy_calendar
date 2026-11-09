@@ -81,6 +81,8 @@ class MainScreen(Screen):
         )
         self.refresh_button = Button(text="Refresh", size_hint=(None, 1), width=110)
         self.refresh_button.bind(on_press=lambda *_: self.load_events())
+        self.sync_button = Button(text="Sync", size_hint=(None, 1), width=90)
+        self.sync_button.bind(on_press=lambda *_: self.sync_events())
         header = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
@@ -89,6 +91,7 @@ class MainScreen(Screen):
         )
         header.add_widget(self.title)
         header.add_widget(self.refresh_button)
+        header.add_widget(self.sync_button)
 
         self.status_label = wrapped_label(
             size_hint_y=None,
@@ -161,6 +164,47 @@ class MainScreen(Screen):
             )
             return
         Clock.schedule_once(lambda *_: self._show_events(events))
+
+    def sync_events(self) -> None:
+        """Rebuild the backend cache in a background thread."""
+        client = self.client
+        if client is None:
+            self._set_status(
+                self.configuration_error or "Backend client is not configured.",
+                error=True,
+            )
+            return
+        self.sync_button.disabled = True
+        self._set_status("Syncing…")
+        thread = threading.Thread(
+            target=self._run_sync,
+            args=(client,),
+            daemon=True,
+        )
+        thread.start()
+
+    def _run_sync(self, client: BackendClient) -> None:
+        """Run the sync off the UI thread and hand the count back to the UI."""
+        try:
+            synced = client.sync()
+        except BackendError as error:
+            message = error.message
+            Clock.schedule_once(lambda *_: self._on_sync_failed(message))
+            return
+        Clock.schedule_once(lambda *_: self._on_synced(synced))
+
+    def _on_sync_failed(self, message: str) -> None:
+        """Re-enable the sync button and show the backend error."""
+        self.sync_button.disabled = False
+        self._set_status(f"Could not sync: {message}", error=True)
+
+    def _on_synced(self, synced: int) -> None:
+        """Show the synced count and reload the event list."""
+        self.sync_button.disabled = False
+        self.load_events()
+        self._set_status(
+            f"Synced {synced} event" + ("" if synced == 1 else "s"),
+        )
 
     def _show_events(self, events: list[CalendarEvent]) -> None:
         """Replace the event list with the fetched events."""
