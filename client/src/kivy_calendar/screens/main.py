@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from typing import Any
 
 from kivy.clock import Clock
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
-from kivy.uix.label import Label
 from kivy.uix.screenmanager import Screen
 from kivy.uix.scrollview import ScrollView
 from kivy.utils import escape_markup
@@ -19,12 +19,18 @@ from kivy_calendar.screens.ui import wrapped_label
 
 ERROR_COLOR = (0.95, 0.42, 0.42, 1)
 STATUS_COLOR = (0.68, 0.68, 0.68, 1)
+ROW_COLOR = (0.16, 0.18, 0.22, 1)
 
 
-class EventRow(Label):
-    """A single event row with a bold summary and its time span."""
+class EventRow(Button):
+    """A tappable event row with a bold summary and its time span."""
 
-    def __init__(self, event: CalendarEvent, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        event: CalendarEvent,
+        open_event: Callable[[CalendarEvent], None],
+        **kwargs: Any,
+    ) -> None:
         """Create the row from an event."""
         summary = escape_markup(event.summary or "Untitled event")
         when = escape_markup(format_event_when(event))
@@ -35,9 +41,13 @@ class EventRow(Label):
             valign="middle",
             size_hint_y=None,
             height=72,
-            padding=(12, 8),
+            background_normal="",
+            background_down="",
+            background_color=ROW_COLOR,
             **kwargs,
         )
+        self.event = event
+        self.bind(on_release=lambda *_: open_event(event))
         self.bind(width=self._sync_text_size)
         self._sync_text_size()
 
@@ -162,13 +172,27 @@ class MainScreen(Screen):
         count = len(events)
         self._set_status(f"{count} event" + ("" if count == 1 else "s"))
         for event in events:
-            self.event_list.add_widget(EventRow(event))
+            self.event_list.add_widget(EventRow(event, self.open_event))
 
     def _set_status(self, text: str, *, error: bool = False) -> None:
         """Show a status or error message above the event list."""
         self.status_label.text = text
         self.status_label.color = ERROR_COLOR if error else STATUS_COLOR
 
+    def open_event(self, event: CalendarEvent) -> None:
+        """Open the event form for an existing event."""
+        manager = self.manager
+        if manager is None:
+            return
+        form = manager.get_screen("add_event")
+        form.open_for(event)
+        manager.current = "add_event"
+
     def open_add_event(self, *args: Any) -> None:
-        """Open the add-event screen."""
-        self.manager.current = "add_event"
+        """Open the event form for a new event."""
+        manager = self.manager
+        if manager is None:
+            return
+        form = manager.get_screen("add_event")
+        form.open_for(None)
+        manager.current = "add_event"

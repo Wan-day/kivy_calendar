@@ -112,6 +112,70 @@ def test_create_event_posts_the_backend_payload(
     assert captured["method"] == "POST"
 
 
+def test_update_event_patches_the_event_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The client PATCHes the event URL with the updated payload."""
+
+    captured: dict[str, str] = {}
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        captured["url"] = str(request.full_url)
+        captured["method"] = request.get_method()
+        return _FakeResponse(
+            {
+                "id": "event-1",
+                "summary": "Team standup",
+                "start": "2026-11-06T10:00:00+01:00",
+                "end": "2026-11-06T10:30:00+01:00",
+                "start_timezone": "Europe/Berlin",
+                "end_timezone": "Europe/Berlin",
+            },
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    event = CalendarEvent(
+        id="event-1",
+        summary="Team standup",
+        start=datetime.fromisoformat("2026-11-06T10:00:00+01:00"),
+        end=datetime.fromisoformat("2026-11-06T10:30:00+01:00"),
+        start_timezone="Europe/Berlin",
+        end_timezone="Europe/Berlin",
+    )
+    updated = _client().update_event(event)
+
+    assert updated.start == datetime.fromisoformat("2026-11-06T10:00:00+01:00")
+    assert captured["url"] == f"{BASE_URL}/events/event-1"
+    assert captured["method"] == "PATCH"
+
+
+def test_delete_event_sends_a_delete_and_quotes_the_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The client sends DELETE and accepts the empty 204 response."""
+
+    captured: dict[str, str] = {}
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        captured["url"] = str(request.full_url)
+        captured["method"] = request.get_method()
+        return _FakeResponse(None)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    _client().delete_event("event/1")
+
+    assert captured["url"] == f"{BASE_URL}/events/event%2F1"
+    assert captured["method"] == "DELETE"
+
+
 def test_list_events_raises_backend_error_on_http_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -14,6 +14,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 BASE_URL_ENV = "KIVY_CALENDAR_API_BASE_URL"
 TOKEN_ENV = "BACKEND_API_TOKEN"
@@ -92,6 +93,19 @@ class BackendClient:
             body=self._event_payload(event),
         )
         return self._event_from_payload(payload)
+
+    def update_event(self, event: CalendarEvent) -> CalendarEvent:
+        """Update an existing event in the backend calendar."""
+        payload = self._request(
+            f"/events/{quote(event.id, safe='')}",
+            method="PATCH",
+            body=self._event_payload(event),
+        )
+        return self._event_from_payload(payload)
+
+    def delete_event(self, event_id: str) -> None:
+        """Delete an event from the backend calendar."""
+        self._request(f"/events/{quote(event_id, safe='')}", method="DELETE")
 
     def _request(self, path: str, *, method: str, body: object | None = None) -> Any:
         """Perform a JSON request against the backend and decode the response."""
