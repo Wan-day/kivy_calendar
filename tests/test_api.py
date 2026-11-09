@@ -91,6 +91,24 @@ def test_default_provider_requests_the_full_calendar_scope(
 
     assert captured["scopes"] == CALENDAR_SCOPES
     assert isinstance(provider, UnavailableCalendarProvider)
+    result = provider.list_events()
+    assert result.error is not None
+    assert "stop before Google" in result.error.message
+
+
+def test_default_provider_names_missing_google_variables() -> None:
+    """The unavailable provider reports which Google variables are missing."""
+    provider = _build_default_provider(Settings())
+
+    result = provider.list_events()
+
+    assert result.error is not None
+    for name in (
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "GOOGLE_REFRESH_TOKEN",
+    ):
+        assert name in result.error.message
 
 
 @pytest.fixture

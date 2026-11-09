@@ -50,6 +50,13 @@ Copy the printed `GOOGLE_REFRESH_TOKEN` into `.env`. The helper requests only
 `https://www.googleapis.com/auth/calendar.events` and does not use a public web
 redirect.
 
+If protected calls fail with `Google Calendar is not configured: missing Google
+OAuth environment variables: ...`, the backend process did not receive those
+variables. Export `.env` in the same shell that starts uvicorn and restart it;
+editing `.env` has no effect on an already running process. A `401` with
+`invalid bearer token` means the client and backend use different
+`BACKEND_API_TOKEN` values.
+
 ## Running the client
 
 The Kivy client talks to the backend over HTTP. Install it into the project
