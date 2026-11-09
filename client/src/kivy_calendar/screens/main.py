@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from datetime import date
 from typing import Any
 
 from kivy.clock import Clock
@@ -11,9 +12,21 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.screenmanager import Screen
 from kivy.uix.scrollview import ScrollView
+from kivy.uix.spinner import Spinner
+from kivy.uix.textinput import TextInput
 from kivy.utils import escape_markup
 
 from kivy_calendar.api import BackendClient, BackendError, CalendarEvent
+from kivy_calendar.filtering import (
+    DEFAULT_SORT,
+    DEFAULT_SORT_LABEL,
+    SORT_BY_LABEL,
+    SORT_LABELS,
+    SortOrder,
+    filter_events,
+    parse_date_input,
+    sort_events,
+)
 from kivy_calendar.formatting import format_event_when
 from kivy_calendar.screens.ui import wrapped_label
 
@@ -89,9 +102,9 @@ class MainScreen(Screen):
             height=48,
             spacing=8,
         )
-        header.add_widget(self.title)
-        header.add_widget(self.refresh_button)
         header.add_widget(self.sync_button)
+        header.add_widget(self.refresh_button)
+        header.add_widget(self.title)
 
         self.status_label = wrapped_label(
             size_hint_y=None,
@@ -99,6 +112,73 @@ class MainScreen(Screen):
             font_size="14sp",
             color=STATUS_COLOR,
         )
+
+        self.name_filter = TextInput(
+            hint_text="Filter by name",
+            size_hint_y=None,
+            height=40,
+            padding=(10, 10),
+        )
+        self.date_from_filter = TextInput(
+            hint_text="From date",
+            size_hint_y=None,
+            height=40,
+            padding=(10, 10),
+        )
+        self.date_to_filter = TextInput(
+            hint_text="To date",
+            size_hint_y=None,
+            height=40,
+            padding=(10, 10),
+        )
+        self.sort_spinner = Spinner(
+            text=DEFAULT_SORT_LABEL,
+            values=SORT_LABELS,
+            size_hint_y=None,
+            size_hint_x=0.8,
+            height=40,
+        )
+        self.clear_filters_button = Button(
+            text="Clear",
+            size_hint_y=None,
+            height=40,
+            size_hint_x=None,
+            width=90,
+        )
+        self.name_filter.bind(text=self._schedule_apply_filters)
+        self.date_from_filter.bind(text=self._schedule_apply_filters)
+        self.date_to_filter.bind(text=self._schedule_apply_filters)
+        self.sort_spinner.bind(text=self._on_sort_changed)
+        self.clear_filters_button.bind(on_press=self._clear_filters)
+        self._sort_order: SortOrder = DEFAULT_SORT
+        self._filter_debounce: Any = None
+
+        self.filter_panel = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            height=136,
+            spacing=4,
+            padding=(0, 4),
+        )
+        self.filter_panel.add_widget(self.name_filter)
+        self.date_filters = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=40,
+            spacing=4,
+        )
+        self.date_filters.add_widget(self.date_to_filter)
+        self.date_filters.add_widget(self.date_from_filter)
+        self.filter_panel.add_widget(self.date_filters)
+        self.sort_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=40,
+            spacing=4,
+        )
+        self.sort_row.add_widget(self.clear_filters_button)
+        self.sort_row.add_widget(self.sort_spinner)
+        self.filter_panel.add_widget(self.sort_row)
 
         self.event_list = BoxLayout(
             orientation="vertical",
@@ -118,10 +198,11 @@ class MainScreen(Screen):
         self.add_button.bind(on_press=self.open_add_event)
 
         layout = BoxLayout(orientation="vertical", padding=12, spacing=8)
-        layout.add_widget(header)
-        layout.add_widget(self.status_label)
-        layout.add_widget(scroll_view)
         layout.add_widget(self.add_button)
+        layout.add_widget(scroll_view)
+        layout.add_widget(self.filter_panel)
+        layout.add_widget(self.status_label)
+        layout.add_widget(header)
         self.add_widget(layout)
 
         if self.client is None:
@@ -207,16 +288,87 @@ class MainScreen(Screen):
         )
 
     def _show_events(self, events: list[CalendarEvent]) -> None:
-        """Replace the event list with the fetched events."""
+        """Replace the event list and re-apply the current filters."""
         self.events = events
-        self.event_list.clear_widgets()
-        if not events:
-            self._set_status("No events yet. Tap Add event to create one.")
+        self._rebuild_view()
+
+    def _rebuild_view(self) -> None:
+        """Filter, sort and render the events matching the current inputs."""
+        date_from: date | None = None
+        date_to: date | None = None
+        date_from_text = self.date_from_filter.text.strip()
+        date_to_text = self.date_to_filter.text.strip()
+        if date_from_text or date_to_text:
+            date_from = parse_date_input(date_from_text)
+            date_to = parse_date_input(date_to_text)
+            invalid = (date_from_text and date_from is None) or (
+                date_to_text and date_to is None
+            )
+            if not invalid and (
+                date_from is not None and date_to is not None and date_from > date_to
+            ):
+                invalid = True
+            if invalid:
+                self._set_status("Use dates like YYYY-MM-DD.", error=True)
+                return
+        visible = sort_events(
+            filter_events(
+                self.events,
+                name=self.name_filter.text,
+                date_from=date_from,
+                date_to=date_to,
+            ),
+            order=self._sort_order,
+        )
+        filtered = bool(
+            self.name_filter.text.strip()
+            or date_from_text
+            or date_to_text
+            or self._sort_order != DEFAULT_SORT,
+        )
+        if not visible:
+            self.event_list.clear_widgets()
+            self._set_status(
+                "No events match the filters."
+                if filtered
+                else "No events yet. Tap Add event to create one.",
+            )
             return
-        count = len(events)
-        self._set_status(f"{count} event" + ("" if count == 1 else "s"))
-        for event in events:
+        self._set_status(f"{len(visible)} event" + ("" if len(visible) == 1 else "s"))
+        self.event_list.clear_widgets()
+        for event in reversed(visible):
             self.event_list.add_widget(EventRow(event, self.open_event))
+
+    def _schedule_apply_filters(self, *args: Any) -> None:
+        """Debounce text-input driven filtering before re-rendering."""
+        if self._filter_debounce is not None:
+            self._unschedule_filter()
+        self._filter_debounce = Clock.schedule_once(self._apply_filters, 0.25)
+
+    def _unschedule_filter(self) -> None:
+        """Drop a pending filtered re-render."""
+        if self._filter_debounce is not None:
+            self._filter_debounce.cancel()
+            self._filter_debounce = None
+
+    def _apply_filters(self, *args: Any) -> None:
+        """Recompute the filtered and sorted view from the current inputs."""
+        self._filter_debounce = None
+        self._rebuild_view()
+
+    def _on_sort_changed(self, instance: Spinner, value: str) -> None:
+        """Re-render when the user picks a sort order."""
+        self._sort_order = SORT_BY_LABEL.get(value, DEFAULT_SORT)
+        self._rebuild_view()
+
+    def _clear_filters(self) -> None:
+        """Reset every filter input and re-render the full list."""
+        self.name_filter.text = ""
+        self.date_from_filter.text = ""
+        self.date_to_filter.text = ""
+        self.sort_spinner.text = DEFAULT_SORT_LABEL
+        self._sort_order = DEFAULT_SORT
+        self._rebuild_view()
 
     def _set_status(self, text: str, *, error: bool = False) -> None:
         """Show a status or error message above the event list."""

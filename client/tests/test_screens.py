@@ -148,10 +148,19 @@ def _run_inline(monkeypatch: pytest.MonkeyPatch) -> None:
             """Run the target instead of starting a thread."""
             self._target(*self._args)
 
-    from kivy.clock import Clock
+    from kivy.clock import ClockBase
 
     monkeypatch.setattr(threading, "Thread", InlineThread)
-    monkeypatch.setattr(Clock, "schedule_once", lambda callback, *_: callback(0))
+
+    def _run_immediately(
+        self: object,
+        callback: Callable[..., Any],
+        *args: Any,
+    ) -> None:
+        """Run a scheduled one-shot callback immediately instead of later."""
+        callback(0)
+
+    monkeypatch.setattr(ClockBase, "schedule_once", _run_immediately)
 
 
 def test_screens_are_reachable_by_name() -> None:
@@ -412,3 +421,98 @@ def test_suggest_time_rejects_an_unknown_time_zone() -> None:
 
     assert "Unknown time zone" in add_event_screen.status_label.text
     assert client.free_slot_requests == []
+
+
+def test_main_screen_filters_by_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The name filter re-renders the rows and reports the visible count."""
+    _, main_screen, _ = _make_screens(FakeClient())
+    main_screen._show_events([_sample_event()])
+
+    main_screen.name_filter.text = "Standup"
+    _run_inline(monkeypatch)
+
+    assert len(main_screen.event_list.children) == 1
+    assert main_screen.status_label.text == "1 event"
+
+    main_screen.name_filter.text = "Dentist"
+    _run_inline(monkeypatch)
+
+    assert len(main_screen.event_list.children) == 0
+    assert main_screen.status_label.text == "No events match the filters."
+
+
+def test_main_screen_filters_by_date_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The date bounds keep only events on the given local dates."""
+    _, main_screen, _ = _make_screens(FakeClient())
+    main_screen._show_events([_sample_event()])
+
+    main_screen.date_from_filter.text = "2026-11-09"
+    main_screen.date_to_filter.text = "2026-11-09"
+    _run_inline(monkeypatch)
+
+    assert len(main_screen.event_list.children) == 1
+
+    main_screen.date_from_filter.text = "2026-11-10"
+    main_screen.date_to_filter.text = "2026-11-10"
+    _run_inline(monkeypatch)
+
+    assert len(main_screen.event_list.children) == 0
+    assert main_screen.status_label.text == "No events match the filters."
+
+
+def test_main_screen_sorts_the_visible_events() -> None:
+    """The sort spinner re-renders the list in the chosen order."""
+    from kivy_calendar.api import CalendarEvent
+
+    _, main_screen, _ = _make_screens(FakeClient())
+    events = [
+        CalendarEvent(
+            id="event-2",
+            summary="Zebra",
+            start=datetime(2026, 11, 10, 9, 0, tzinfo=BERLIN),
+            end=datetime(2026, 11, 10, 10, 0, tzinfo=BERLIN),
+            start_timezone="Europe/Berlin",
+            end_timezone="Europe/Berlin",
+        ),
+        CalendarEvent(
+            id="event-1",
+            summary="Alpha",
+            start=datetime(2026, 11, 9, 9, 0, tzinfo=BERLIN),
+            end=datetime(2026, 11, 9, 10, 0, tzinfo=BERLIN),
+            start_timezone="Europe/Berlin",
+            end_timezone="Europe/Berlin",
+        ),
+    ]
+    main_screen._show_events(events)
+    main_screen.sort_spinner.text = "Name: A-Z"
+
+    assert main_screen.event_list.children[0].event.summary == "Alpha"
+
+
+def test_main_screen_clear_filters_resets_the_list() -> None:
+    """Clearing the filters restores the full event list."""
+    _, main_screen, _ = _make_screens(FakeClient())
+    main_screen._show_events([_sample_event()])
+    main_screen.name_filter.text = "Standup"
+
+    main_screen._clear_filters()
+
+    assert len(main_screen.event_list.children) == 1
+    assert main_screen.name_filter.text == ""
+    assert main_screen.sort_spinner.text == "Start: oldest first"
+
+
+def test_main_screen_reports_an_invalid_date_filter() -> None:
+    """An unparsable date filter reports the error and keeps the rows."""
+    _, main_screen, _ = _make_screens(FakeClient())
+    main_screen._show_events([_sample_event()])
+    main_screen.date_from_filter.text = "not-a-date"
+
+    main_screen._rebuild_view()
+
+    assert main_screen.status_label.text == "Use dates like YYYY-MM-DD."
+    assert len(main_screen.event_list.children) == 1
