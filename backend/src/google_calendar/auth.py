@@ -17,8 +17,10 @@ and secret exported, run the local browser flow from the repository root::
 
 The helper starts a temporary server on localhost, opens the consent page, and
 prints the refresh token.  Copy the printed value into ``GOOGLE_REFRESH_TOKEN``
-in your untracked ``.env`` and keep it out of git.  Only the
-``https://www.googleapis.com/auth/calendar.events`` scope is requested.
+in your untracked ``.env`` and keep it out of git.  The helper requests both
+``https://www.googleapis.com/auth/calendar.events`` and
+``https://www.googleapis.com/auth/calendar.calendarlist.readonly`` so the
+backend can discover every calendar on the account.
 """
 
 from __future__ import annotations
@@ -34,7 +36,10 @@ from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore[import-un
 from core.errors import ErrorCode, Result
 
 CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events"
-CALENDAR_SCOPES: tuple[str, ...] = (CALENDAR_EVENTS_SCOPE,)
+CALENDAR_LIST_SCOPE = (
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
+)
+CALENDAR_SCOPES: tuple[str, ...] = (CALENDAR_EVENTS_SCOPE, CALENDAR_LIST_SCOPE)
 
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 

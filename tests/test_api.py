@@ -45,9 +45,11 @@ def _event_payload(
     event_id: str = "event-1",
     *,
     summary: str = "Team standup",
+    calendar_id: str = "",
 ) -> dict[str, object]:
     return {
         "id": event_id,
+        "calendar_id": calendar_id,
         "summary": summary,
         "start": _event(event_id).start.isoformat(),
         "end": _event(event_id).end.isoformat(),
@@ -211,6 +213,61 @@ def test_create_event_returns_upstream_error_without_caching(
     cached = repository.get("event-1")
     assert cached.error is not None
     assert cached.error.code is ErrorCode.NOT_FOUND
+
+
+def test_create_and_list_return_the_calendar_id(client: TestClient) -> None:
+    """The owning calendar id is stored and returned with the event."""
+    created = client.post(
+        "/events",
+        json=_event_payload(calendar_id="work@example.com"),
+        headers=_auth_headers(),
+    )
+
+    assert created.status_code == 201
+    assert created.json()["calendar_id"] == "work@example.com"
+
+    listed = client.get("/events", headers=_auth_headers())
+
+    assert listed.status_code == 200
+    assert listed.json()[0]["calendar_id"] == "work@example.com"
+
+
+def test_update_preserves_the_events_calendar(client: TestClient) -> None:
+    """A patch without a calendar keeps the calendar the event came from."""
+    created = client.post(
+        "/events",
+        json=_event_payload(calendar_id="work@example.com"),
+        headers=_auth_headers(),
+    )
+    assert created.status_code == 201
+
+    response = client.patch(
+        "/events/event-1",
+        json=_event_payload("event-1", summary="Renamed standup"),
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["calendar_id"] == "work@example.com"
+
+
+def test_delete_after_create_targets_the_events_calendar(
+    client: TestClient,
+    provider: FakeCalendarProvider,
+) -> None:
+    """Create-then-delete keeps working across calendars."""
+    created = client.post(
+        "/events",
+        json=_event_payload(calendar_id="work@example.com"),
+        headers=_auth_headers(),
+    )
+    assert created.status_code == 201
+
+    response = client.delete("/events/event-1", headers=_auth_headers())
+
+    assert response.status_code == 204
+    assert provider.events == []
+    assert client.get("/events/event-1", headers=_auth_headers()).status_code == 404
 
 
 def test_create_event_rejects_naive_datetimes(client: TestClient) -> None:

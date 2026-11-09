@@ -24,11 +24,15 @@ class UnavailableCalendarProvider:
         """Fail updates with an authentication error."""
         return Result.fail(ErrorCode.AUTH_ERROR, self._message)
 
-    def delete_event(self, event_id: str) -> Result[None]:
+    def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:
         """Fail deletes with an authentication error."""
         return Result.fail(ErrorCode.AUTH_ERROR, self._message)
 
-    def get_event(self, event_id: str) -> Result[Event | None]:
+    def get_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+    ) -> Result[Event | None]:
         """Fail gets with an authentication error."""
         return Result.fail(ErrorCode.AUTH_ERROR, self._message)
 

@@ -18,12 +18,14 @@ def _event(
     end: datetime | None = None,
     start_timezone: str = "Europe/Berlin",
     end_timezone: str = "Europe/Berlin",
+    calendar_id: str = "",
     description: str | None = None,
     recurrence: list[str] | None = None,
     extended_properties: dict[str, str] | None = None,
 ) -> Event:
     return Event(
         id=id,
+        calendar_id=calendar_id,
         summary=summary,
         start=start or datetime(2026, 11, 6, 9, 0, tzinfo=BERLIN),
         end=end or datetime(2026, 11, 6, 9, 30, tzinfo=BERLIN),
@@ -107,6 +109,23 @@ def test_optional_fields_have_safe_defaults() -> None:
     event = _event()
 
     assert event.summary == "Team standup"
+    assert event.calendar_id == ""
     assert event.description is None
     assert event.recurrence is None
     assert event.extended_properties == {}
+
+
+def test_calendar_id_round_trips_through_serialisation() -> None:
+    """The owning calendar survives a JSON round-trip."""
+    event = _event(calendar_id="work@example.com")
+
+    restored = Event.model_validate(event.model_dump(mode="json"))
+
+    assert restored.calendar_id == "work@example.com"
+
+
+def test_blank_calendar_id_is_allowed() -> None:
+    """A blank calendar id means the provider's configured default calendar."""
+    event = _event(calendar_id="")
+
+    assert event.calendar_id == ""

@@ -89,8 +89,12 @@ class FakeCalendarProvider:
         self._events[event.id] = event.model_copy(deep=True)
         return Result.ok(event.model_copy(deep=True))
 
-    def delete_event(self, event_id: str) -> Result[None]:
-        """Remove a stored event, failing when its id is unknown."""
+    def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:
+        """Remove a stored event, failing when its id is unknown.
+
+        Events are keyed by id only, so ``calendar_id`` is accepted but ignored
+        by the fake.
+        """
         self.calls.append((ProviderOperation.DELETE, event_id))
         failure = self._take_failure(ProviderOperation.DELETE)
         if failure is not None:
@@ -103,8 +107,16 @@ class FakeCalendarProvider:
         del self._events[event_id]
         return Result.ok(None)
 
-    def get_event(self, event_id: str) -> Result[Event | None]:
-        """Return a stored event, or ``None`` when it does not exist."""
+    def get_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+    ) -> Result[Event | None]:
+        """Return a stored event, or ``None`` when it does not exist.
+
+        Events are keyed by id only, so ``calendar_id`` is accepted but ignored
+        by the fake.
+        """
         self.calls.append((ProviderOperation.GET, event_id))
         failure = self._take_failure(ProviderOperation.GET)
         if failure is not None:

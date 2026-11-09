@@ -71,6 +71,14 @@ from domain.event import Event
 DEFAULT_CALENDAR_ID = "primary"
 MAX_RESULTS = 2500
 
+_READABLE_ACCESS_ROLES = frozenset({"owner", "writer", "reader"})
+_CALENDAR_LIST_AUTH_MESSAGE = (
+    "Google Calendar calendar list access failed: the OAuth refresh token "
+    "does not grant the calendar.calendarlist.readonly scope. Re-run "
+    "`PYTHONPATH=backend/src python -m google_calendar.auth` to grant it, then "
+    "update GOOGLE_REFRESH_TOKEN."
+)
+
 MIN_EVENT_ID_LENGTH = 5
 MAX_EVENT_ID_LENGTH = 1024
 _EVENT_ID_PATTERN = re.compile(
@@ -132,11 +140,13 @@ class GoogleCalendarProvider:
         invalid = _event_id_error(event.id)
         if invalid is not None:
             return Result.fail(invalid.code, invalid.message)
+        calendar_id = event.calendar_id or self._calendar_id
         return self._event_request(
             lambda: self._service.events().insert(
-                calendarId=self._calendar_id,
+                calendarId=calendar_id,
                 body=_event_to_payload(event),
-            )
+            ),
+            calendar_id,
         )
 
     def update_event(self, event: Event) -> Result[Event]:
@@ -148,19 +158,22 @@ class GoogleCalendarProvider:
         invalid = _event_id_error(event.id)
         if invalid is not None:
             return Result.fail(invalid.code, invalid.message)
+        calendar_id = event.calendar_id or self._calendar_id
         return self._event_request(
             lambda: self._service.events().patch(
-                calendarId=self._calendar_id,
+                calendarId=calendar_id,
                 eventId=event.id,
                 body=_event_to_payload(event),
-            )
+            ),
+            calendar_id,
         )
 
-    def delete_event(self, event_id: str) -> Result[None]:
+    def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:
         """Delete the upstream event, reporting a missing event as an error."""
+        target = calendar_id or self._calendar_id
         response = self._execute(
             lambda: self._service.events().delete(
-                calendarId=self._calendar_id,
+                calendarId=target,
                 eventId=event_id,
             )
         )
@@ -168,11 +181,16 @@ class GoogleCalendarProvider:
             return Result.fail(response.error.code, response.error.message)
         return Result.ok(None)
 
-    def get_event(self, event_id: str) -> Result[Event | None]:
+    def get_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+    ) -> Result[Event | None]:
         """Return the upstream event, or ``None`` when Google does not have it."""
+        target = calendar_id or self._calendar_id
         response = self._execute(
             lambda: self._service.events().get(
-                calendarId=self._calendar_id,
+                calendarId=target,
                 eventId=event_id,
             )
         )
@@ -181,18 +199,68 @@ class GoogleCalendarProvider:
                 return Result.ok(None)
             return Result.fail(response.error.code, response.error.message)
 
-        mapped = _event_from_resource(response.value)
+        mapped = _event_from_resource(response.value, target)
         if mapped.error is not None:
             return Result.fail(mapped.error.code, mapped.error.message)
         return Result.ok(mapped.value)
 
     def list_events(self) -> Result[list[Event]]:
-        """Return every timed event, following Google's pagination tokens."""
+        """Return every timed event from every readable calendar.
+
+        Google can expose the same event through more than one calendar, so
+        duplicate ids are collapsed to the first calendar that lists them.
+        """
+        calendars = self._calendar_ids()
+        if calendars.error is not None:
+            return Result.fail(calendars.error.code, calendars.error.message)
+
+        events: list[Event] = []
+        seen: set[str] = set()
+        for calendar_id in calendars.value or []:
+            listed = self._list_calendar_events(calendar_id)
+            if listed.error is not None:
+                return Result.fail(listed.error.code, listed.error.message)
+            for event in listed.value or []:
+                if event.id in seen:
+                    continue
+                seen.add(event.id)
+                events.append(event)
+        return Result.ok(events)
+
+    def _calendar_ids(self) -> Result[list[str]]:
+        """Return the configured default calendar and every readable calendar."""
+        calendar_ids = [self._calendar_id]
+        page_token: str | None = None
+        while True:
+            query: dict[str, Any] = {"maxResults": MAX_RESULTS}
+            if page_token is not None:
+                query["pageToken"] = page_token
+            response = self._calendar_list_request(
+                lambda: self._service.calendarList().list(**query)
+            )
+            if response.error is not None:
+                return Result.fail(response.error.code, response.error.message)
+
+            items = _items_from_response(response.value, description="calendar")
+            if items.error is not None:
+                return Result.fail(items.error.code, items.error.message)
+            for item in items.value or []:
+                calendar_id = _readable_calendar_id(item)
+                if calendar_id is not None and calendar_id not in calendar_ids:
+                    calendar_ids.append(calendar_id)
+
+            page_token = _next_page_token(response.value)
+            if page_token is None:
+                break
+        return Result.ok(calendar_ids)
+
+    def _list_calendar_events(self, calendar_id: str) -> Result[list[Event]]:
+        """Return every timed event in one calendar, following pagination."""
         events: list[Event] = []
         page_token: str | None = None
         while True:
             query: dict[str, Any] = {
-                "calendarId": self._calendar_id,
+                "calendarId": calendar_id,
                 "maxResults": MAX_RESULTS,
                 "singleEvents": False,
                 "showDeleted": False,
@@ -211,7 +279,7 @@ class GoogleCalendarProvider:
             for item in items.value or []:
                 if _is_all_day_resource(item):
                     continue
-                mapped = _event_from_resource(item)
+                mapped = _event_from_resource(item, calendar_id)
                 if mapped.error is not None:
                     # One unmappable entry (an all-day event or an offset-only
                     # event without an IANA zone) must not abort the whole sync.
@@ -224,12 +292,29 @@ class GoogleCalendarProvider:
                 break
         return Result.ok(events)
 
-    def _event_request(self, request: Callable[[], Any]) -> Result[Event]:
+    def _calendar_list_request(self, request: Callable[[], Any]) -> Result[Any]:
+        """Execute a calendar-list request with scope-specific auth errors."""
+        try:
+            response: Any = request().execute()
+        except Exception as exc:
+            if isinstance(exc, RefreshError) or (
+                isinstance(exc, HttpError) and _http_status(exc) in (401, 403)
+            ):
+                return Result.fail(ErrorCode.AUTH_ERROR, _CALENDAR_LIST_AUTH_MESSAGE)
+            failure = _error_from_exception(exc)
+            return Result.fail(failure.code, failure.message)
+        return Result.ok(response)
+
+    def _event_request(
+        self,
+        request: Callable[[], Any],
+        calendar_id: str,
+    ) -> Result[Event]:
         """Execute a request whose response is a Google event resource."""
         response = self._execute(request)
         if response.error is not None:
             return Result.fail(response.error.code, response.error.message)
-        return _event_from_resource(response.value)
+        return _event_from_resource(response.value, calendar_id)
 
     def _execute(self, request: Callable[[], Any]) -> Result[Any]:
         """Build and execute one Google request, mapping every failure."""
@@ -274,7 +359,7 @@ def _event_to_payload(event: Event) -> dict[str, Any]:
     return payload
 
 
-def _event_from_resource(raw: object) -> Result[Event]:
+def _event_from_resource(raw: object, calendar_id: str) -> Result[Event]:
     """Map a Google event resource back onto the domain model."""
     if not isinstance(raw, dict):
         return Result.fail(
@@ -357,6 +442,7 @@ def _event_from_resource(raw: object) -> Result[Event]:
         return Result.ok(
             Event(
                 id=event_id,
+                calendar_id=calendar_id,
                 summary=summary,
                 description=description,
                 start=start_time,
@@ -425,20 +511,35 @@ def _resource_time(
     )
 
 
-def _items_from_response(raw: object) -> Result[list[object]]:
-    """Return the ``items`` list from an ``events.list`` response."""
+def _items_from_response(
+    raw: object,
+    *,
+    description: str = "event",
+) -> Result[list[object]]:
+    """Return the ``items`` list from a Google list response."""
+    message = f"Google Calendar returned an invalid {description} list"
     if not isinstance(raw, dict):
-        return Result.fail(
-            ErrorCode.INVALID_EVENT,
-            "Google Calendar returned an invalid event list",
-        )
+        return Result.fail(ErrorCode.INVALID_EVENT, message)
     items = raw.get("items", [])
     if not isinstance(items, list):
-        return Result.fail(
-            ErrorCode.INVALID_EVENT,
-            "Google Calendar returned an invalid event list",
-        )
+        return Result.fail(ErrorCode.INVALID_EVENT, message)
     return Result.ok(items)
+
+
+def _readable_calendar_id(item: object) -> str | None:
+    """Return a usable calendar id, or ``None`` when the entry is skipped."""
+    if not isinstance(item, dict):
+        return None
+    if item.get("deleted") is True:
+        return None
+    if item.get("selected") is False:
+        return None
+    if item.get("accessRole") not in _READABLE_ACCESS_ROLES:
+        return None
+    calendar_id = item.get("id")
+    if not isinstance(calendar_id, str) or not calendar_id.strip():
+        return None
+    return calendar_id
 
 
 def _next_page_token(raw: object) -> str | None:

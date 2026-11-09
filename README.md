@@ -35,9 +35,12 @@ set +a
 
 or supply them through your deployment tool.
 
-`GOOGLE_CALENDAR_ID` selects the calendar the backend reads and writes. It
-defaults to `primary`; point development and test runs at a dedicated test
-calendar rather than the real primary calendar.
+`GOOGLE_CALENDAR_ID` is the default calendar for new events. It defaults to
+`primary`; point development and test runs at a dedicated test calendar rather
+than the real primary calendar. The backend discovers every selected calendar
+the account can read through Google's `calendarList` API, so Work and shared
+calendars are read as well. New events go to `GOOGLE_CALENDAR_ID`, while edits
+and deletes target the calendar the event came from.
 
 To obtain the refresh token once, export the client id and secret and run the
 local browser helper from the repository root:
@@ -46,9 +49,16 @@ local browser helper from the repository root:
 PYTHONPATH=backend/src python -m google_calendar.auth
 ```
 
-Copy the printed `GOOGLE_REFRESH_TOKEN` into `.env`. The helper requests only
-`https://www.googleapis.com/auth/calendar.events` and does not use a public web
-redirect.
+Copy the printed `GOOGLE_REFRESH_TOKEN` into `.env`. The helper requests
+`https://www.googleapis.com/auth/calendar.events` and
+`https://www.googleapis.com/auth/calendar.calendarlist.readonly`; it does not
+use a public web redirect.
+
+If you already have a refresh token from an older version of the app, you
+**must** re-run the helper after pulling multi-calendar support and replace
+`GOOGLE_REFRESH_TOKEN`. The existing token does not carry the calendar-list
+scope, so token refresh or calendar discovery fails with `invalid_scope` until
+the new scope is granted.
 
 If protected calls fail with `Google Calendar is not configured: missing Google
 OAuth environment variables: ...`, the backend process did not receive those

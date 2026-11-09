@@ -87,6 +87,7 @@ def _sample_event() -> Any:
         end=datetime(2026, 11, 9, 10, 0, tzinfo=BERLIN),
         start_timezone="Europe/Berlin",
         end_timezone="Europe/Berlin",
+        calendar_id="work@example.com",
         recurrence=["FREQ=WEEKLY"],
         extended_properties={"source": "kivy-calendar"},
     )
@@ -256,6 +257,7 @@ def test_edit_form_keeps_the_id_and_hidden_fields() -> None:
     assert event is not None
     assert event.id == original.id
     assert event.summary == "Standup (moved)"
+    assert event.calendar_id == original.calendar_id
     assert event.recurrence == original.recurrence
     assert event.extended_properties == original.extended_properties
 

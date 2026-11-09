@@ -28,10 +28,12 @@ def _event(
     *,
     summary: str = "Team standup",
     hour: int = 9,
+    calendar_id: str = "",
 ) -> Event:
     start = datetime(2026, 11, 6, hour, 0, tzinfo=BERLIN)
     return Event(
         id=event_id,
+        calendar_id=calendar_id,
         summary=summary,
         start=start,
         end=start + timedelta(minutes=30),
@@ -93,9 +95,39 @@ class _FailingCompleteQueue(RetryQueue):
 class _MissingAfterConflictProvider(FakeCalendarProvider):
     """A provider that reports a conflict but never returns the event."""
 
-    def get_event(self, event_id: str) -> Result[Event | None]:
+    def get_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+    ) -> Result[Event | None]:
         self.calls.append((ProviderOperation.GET, event_id))
         return Result.ok(None)
+
+
+class _RecordingProvider(FakeCalendarProvider):
+    """A fake provider that records the calendar id of targeted operations."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.delete_calls: list[tuple[str, str]] = []
+        self.get_calls: list[tuple[str, str]] = []
+        self.update_calls: list[str] = []
+
+    def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:
+        self.delete_calls.append((calendar_id, event_id))
+        return super().delete_event(calendar_id, event_id)
+
+    def get_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+    ) -> Result[Event | None]:
+        self.get_calls.append((calendar_id, event_id))
+        return super().get_event(calendar_id, event_id)
+
+    def update_event(self, event: Event) -> Result[Event]:
+        self.update_calls.append(event.calendar_id)
+        return super().update_event(event)
 
 
 @pytest.fixture
@@ -288,7 +320,7 @@ def test_delete_failure_keeps_the_event_and_queues_a_retry(
     jobs = _jobs(retry_queue.list_due())
     assert len(jobs) == 1
     assert jobs[0].operation == DELETE_OPERATION
-    assert jobs[0].payload == {"event_id": event.id}
+    assert jobs[0].payload == {"event_id": event.id, "calendar_id": ""}
 
 
 def test_delete_of_a_missing_event_is_not_queued(
@@ -313,6 +345,86 @@ def test_update_of_a_missing_event_is_not_queued(
     assert result.error is not None
     assert result.error.code is ErrorCode.NOT_FOUND
     assert _jobs(retry_queue.list_due()) == []
+
+
+def test_delete_uses_the_cached_events_calendar(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A delete targets the calendar the cached event came from."""
+    provider = _RecordingProvider()
+    service = SyncService(provider, repository, retry_queue)
+    event = _event(calendar_id="work@example.com")
+    assert service.create_event(event).is_ok
+
+    assert service.delete_event(event.id).is_ok
+
+    assert provider.delete_calls == [("work@example.com", event.id)]
+    assert provider.events == []
+
+
+def test_update_fills_a_blank_calendar_from_the_cache(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """An edit without a calendar stays in the event's cached calendar."""
+    provider = _RecordingProvider()
+    service = SyncService(provider, repository, retry_queue)
+    event = _event(calendar_id="work@example.com")
+    assert service.create_event(event).is_ok
+
+    result = service.update_event(_event(summary="Updated standup"))
+
+    assert _event_result(result).calendar_id == "work@example.com"
+    assert provider.update_calls == ["work@example.com"]
+    cached = _cached(repository, event.id)
+    assert cached is not None
+    assert cached.calendar_id == "work@example.com"
+
+
+def test_delete_retry_payload_includes_and_replays_the_calendar(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A queued delete remembers its calendar and replays against it."""
+    provider = _RecordingProvider()
+    service = SyncService(provider, repository, retry_queue)
+    event = _event(calendar_id="work@example.com")
+    assert service.create_event(event).is_ok
+    provider.fail_next("delete_event", message="calendar is offline")
+
+    assert service.delete_event(event.id).is_error
+
+    job = _jobs(retry_queue.list_due())[0]
+    assert job.payload == {
+        "event_id": event.id,
+        "calendar_id": "work@example.com",
+    }
+
+    _jobs(service.process_due_retries())
+
+    assert provider.delete_calls == [
+        ("work@example.com", event.id),
+        ("work@example.com", event.id),
+    ]
+    assert provider.events == []
+
+
+def test_old_delete_payload_replays_against_the_default_calendar(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A delete queued before multi-calendar support still replays."""
+    provider = _RecordingProvider()
+    service = SyncService(provider, repository, retry_queue)
+    event = _event(calendar_id="work@example.com")
+    assert provider.create_event(event).is_ok
+    _job(retry_queue.enqueue(DELETE_OPERATION, {"event_id": event.id}, now=NOW))
+
+    _jobs(service.process_due_retries(now=NOW))
+
+    assert provider.delete_calls == [("", event.id)]
+    assert provider.events == []
 
 
 
@@ -501,7 +613,7 @@ def test_delete_retry_treats_not_found_as_success(
     assert service.create_event(event).is_ok
     provider.fail_next("delete_event", message="connection dropped")
     assert service.delete_event(event.id).is_error
-    assert provider.delete_event(event.id).is_ok
+    assert provider.delete_event("", event.id).is_ok
 
     processed = _jobs(service.process_due_retries())
 

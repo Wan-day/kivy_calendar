@@ -16,6 +16,18 @@ ENVIRON = {
 }
 
 
+def test_calendar_scopes_include_events_and_calendar_list() -> None:
+    """Multi-calendar discovery needs both OAuth scopes."""
+    assert auth.CALENDAR_SCOPES == (
+        auth.CALENDAR_EVENTS_SCOPE,
+        auth.CALENDAR_LIST_SCOPE,
+    )
+    assert (
+        auth.CALENDAR_LIST_SCOPE
+        == "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
+    )
+
+
 @pytest.mark.parametrize(
     "missing_name",
     [

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
@@ -21,6 +21,7 @@ from domain.event import Event
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY NOT NULL,
+    calendar_id TEXT NOT NULL DEFAULT '',
     summary TEXT NOT NULL,
     start_utc TEXT NOT NULL,
     start_timezone TEXT NOT NULL,
@@ -37,6 +38,7 @@ CREATE INDEX IF NOT EXISTS idx_events_start_utc ON events (start_utc);
 
 _COLUMNS = (
     "id",
+    "calendar_id",
     "summary",
     "start_utc",
     "start_timezone",
@@ -52,7 +54,8 @@ _PLACEHOLDERS = ", ".join("?" for _ in _COLUMNS)
 _INSERT = f"INSERT INTO events ({_COLUMN_LIST}) VALUES ({_PLACEHOLDERS})"
 _UPDATE = """
 UPDATE events
-SET summary = ?,
+SET calendar_id = ?,
+    summary = ?,
     start_utc = ?,
     start_timezone = ?,
     end_utc = ?,
@@ -76,6 +79,18 @@ class EventRepository:
         """The database this repository writes to."""
         return self._database
 
+    def _run[T](
+        self,
+        operation: Callable[[sqlite3.Connection], Result[T]],
+    ) -> Result[T]:
+        """Run ``operation`` after bringing an old cache schema up to date."""
+
+        def migrated(connection: sqlite3.Connection) -> Result[T]:
+            _migrate(connection)
+            return operation(connection)
+
+        return run_in_transaction(self._database, _SCHEMA, migrated)
+
     def create(self, event: Event) -> Result[Event]:
         """Cache a new event, failing if its id is already cached."""
 
@@ -89,7 +104,7 @@ class EventRepository:
                 )
             return Result.ok(event)
 
-        return run_in_transaction(self._database, _SCHEMA, operation)
+        return self._run(operation)
 
     def get(self, event_id: str) -> Result[Event]:
         """Return the cached event with ``event_id``."""
@@ -106,7 +121,7 @@ class EventRepository:
                 )
             return Result.ok(_row_to_event(row))
 
-        return run_in_transaction(self._database, _SCHEMA, operation)
+        return self._run(operation)
 
     def list(self) -> Result[list[Event]]:
         """Return every cached event ordered by start time."""
@@ -117,7 +132,7 @@ class EventRepository:
             ).fetchall()
             return Result.ok([_row_to_event(row) for row in rows])
 
-        return run_in_transaction(self._database, _SCHEMA, operation)
+        return self._run(operation)
 
     def update(self, event: Event) -> Result[Event]:
         """Replace the cached event that has the same id."""
@@ -134,7 +149,7 @@ class EventRepository:
                 )
             return Result.ok(event)
 
-        return run_in_transaction(self._database, _SCHEMA, operation)
+        return self._run(operation)
 
     def delete(self, event_id: str) -> Result[bool]:
         """Delete one cached event."""
@@ -151,7 +166,7 @@ class EventRepository:
                 )
             return Result.ok(True)
 
-        return run_in_transaction(self._database, _SCHEMA, operation)
+        return self._run(operation)
 
     def clear(self) -> Result[int]:
         """Delete every cached event and return how many were removed."""
@@ -160,7 +175,7 @@ class EventRepository:
             cursor = connection.execute("DELETE FROM events")
             return Result.ok(cursor.rowcount)
 
-        return run_in_transaction(self._database, _SCHEMA, operation)
+        return self._run(operation)
 
     def replace_all(self, events: Iterable[Event]) -> Result[int]:
         """Replace the whole cache with ``events`` in one transaction.
@@ -184,13 +199,25 @@ class EventRepository:
                 )
             return Result.ok(len(cached_events))
 
-        return run_in_transaction(self._database, _SCHEMA, operation)
+        return self._run(operation)
+
+
+def _migrate(connection: sqlite3.Connection) -> None:
+    """Add columns introduced after a database was first created."""
+    columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(events)")
+    }
+    if "calendar_id" not in columns:
+        connection.execute(
+            "ALTER TABLE events ADD COLUMN calendar_id TEXT NOT NULL DEFAULT ''"
+        )
 
 
 def _event_values(event: Event) -> tuple[object, ...]:
     """Flatten an event into the cache column order."""
     return (
         event.id,
+        event.calendar_id,
         event.summary,
         event.start.astimezone(UTC).isoformat(),
         event.start_timezone,
@@ -211,8 +238,10 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         ZoneInfo(start_timezone)
     )
     end = datetime.fromisoformat(row["end_utc"]).astimezone(ZoneInfo(end_timezone))
+    calendar_id = row["calendar_id"] if "calendar_id" in row.keys() else ""
     return Event(
         id=row["id"],
+        calendar_id=calendar_id,
         summary=row["summary"],
         start=start,
         end=end,

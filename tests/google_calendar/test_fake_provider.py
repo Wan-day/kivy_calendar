@@ -17,10 +17,12 @@ def _event(
     *,
     summary: str = "Team standup",
     hour: int = 9,
+    calendar_id: str = "",
 ) -> Event:
     start = datetime(2026, 11, 6, hour, 0, tzinfo=BERLIN)
     return Event(
         id=event_id,
+        calendar_id=calendar_id,
         summary=summary,
         start=start,
         end=start + timedelta(minutes=30),
@@ -59,7 +61,7 @@ def test_create_and_get_round_trip(provider: FakeCalendarProvider) -> None:
     event = _event()
 
     created = _event_result(provider.create_event(event))
-    loaded = provider.get_event(event.id)
+    loaded = provider.get_event("", event.id)
 
     assert created == event
     assert loaded.is_ok
@@ -73,7 +75,7 @@ def test_stored_events_cannot_be_mutated_through_results(
     created = _event_result(provider.create_event(_event()))
     created.summary = "Mutated by caller"
 
-    loaded = _loaded_event(provider.get_event("event-1"))
+    loaded = _loaded_event(provider.get_event("", "event-1"))
     assert loaded.summary == "Team standup"
     assert provider.events[0].summary == "Team standup"
 
@@ -91,6 +93,20 @@ def test_create_rejects_a_duplicate_client_generated_id(
     assert len(provider.events) == 1
 
 
+def test_fake_keeps_calendar_id_but_ignores_it_for_lookups(
+    provider: FakeCalendarProvider,
+) -> None:
+    """Events stay keyed by id while preserving the calendar they came from."""
+    event = _event(calendar_id="work@example.com")
+    assert provider.create_event(event).is_ok
+
+    loaded = _loaded_event(provider.get_event("another-calendar", event.id))
+
+    assert loaded.calendar_id == "work@example.com"
+    assert provider.delete_event("another-calendar", event.id).is_ok
+    assert provider.events == []
+
+
 def test_update_replaces_an_existing_event(provider: FakeCalendarProvider) -> None:
     """Updates overwrite the stored copy."""
     assert provider.create_event(_event()).is_ok
@@ -98,7 +114,7 @@ def test_update_replaces_an_existing_event(provider: FakeCalendarProvider) -> No
     updated = _event_result(provider.update_event(_event(summary="Updated")))
 
     assert updated.summary == "Updated"
-    assert _loaded_event(provider.get_event("event-1")).summary == "Updated"
+    assert _loaded_event(provider.get_event("", "event-1")).summary == "Updated"
 
 
 def test_update_reports_a_missing_event(provider: FakeCalendarProvider) -> None:
@@ -113,7 +129,7 @@ def test_get_returns_none_for_a_missing_event(
     provider: FakeCalendarProvider,
 ) -> None:
     """A missing event is a successful lookup with no value."""
-    result = provider.get_event("missing")
+    result = provider.get_event("", "missing")
 
     assert result.is_ok
     assert result.value is None
@@ -123,10 +139,10 @@ def test_delete_removes_an_event(provider: FakeCalendarProvider) -> None:
     """Deleting removes the event and a second delete reports not found."""
     assert provider.create_event(_event()).is_ok
 
-    assert provider.delete_event("event-1").is_ok
-    assert provider.get_event("event-1").value is None
+    assert provider.delete_event("", "event-1").is_ok
+    assert provider.get_event("", "event-1").value is None
 
-    again = provider.delete_event("event-1")
+    again = provider.delete_event("", "event-1")
     assert again.error is not None
     assert again.error.code is ErrorCode.NOT_FOUND
 
