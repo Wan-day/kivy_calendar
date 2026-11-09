@@ -108,6 +108,19 @@ def test_calendar_id_round_trips_through_the_cache(
     assert loaded.calendar_id == "work@example.com"
 
 
+def test_recurring_event_id_round_trips_through_the_cache(
+    repository: EventRepository,
+) -> None:
+    """The series an occurrence belongs to is cached with the event."""
+    event = _event()
+    event.recurring_event_id = "series-1"
+
+    assert repository.create(event).is_ok
+
+    loaded = _cached(repository.get(event.id))
+    assert loaded.recurring_event_id == "series-1"
+
+
 def test_old_cache_is_migrated_with_a_blank_calendar_id(tmp_path: Path) -> None:
     """Opening an old database adds the calendar_id column without losing rows."""
     database = Database(tmp_path / "old" / "calendar.db")

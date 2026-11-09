@@ -19,6 +19,7 @@ def _event(
     start_timezone: str = "Europe/Berlin",
     end_timezone: str = "Europe/Berlin",
     calendar_id: str = "",
+    recurring_event_id: str | None = None,
     description: str | None = None,
     recurrence: list[str] | None = None,
     extended_properties: dict[str, str] | None = None,
@@ -26,6 +27,7 @@ def _event(
     return Event(
         id=id,
         calendar_id=calendar_id,
+        recurring_event_id=recurring_event_id,
         summary=summary,
         start=start or datetime(2026, 11, 6, 9, 0, tzinfo=BERLIN),
         end=end or datetime(2026, 11, 6, 9, 30, tzinfo=BERLIN),
@@ -46,6 +48,15 @@ def test_event_keeps_iana_timezone_information() -> None:
     assert event.start_timezone == "Europe/Berlin"
     assert event.end_timezone == "Europe/Berlin"
     assert event.start.utcoffset() == timedelta(hours=1)
+
+
+def test_event_defaults_the_recurring_event_id_to_none() -> None:
+    """A standalone event has no recurring series to edit."""
+    assert _event().recurring_event_id is None
+
+    series = _event(recurring_event_id="series-1")
+
+    assert series.recurring_event_id == "series-1"
 
 
 def test_naive_start_is_rejected() -> None:

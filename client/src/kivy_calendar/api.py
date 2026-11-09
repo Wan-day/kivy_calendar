@@ -44,6 +44,7 @@ class CalendarEvent:
     start_timezone: str
     end_timezone: str
     calendar_id: str = ""
+    recurring_event_id: str | None = None
     description: str | None = None
     recurrence: list[str] | None = None
     extended_properties: dict[str, str] | None = None
@@ -247,6 +248,11 @@ class BackendClient:
             start_timezone=str(payload.get("start_timezone") or "UTC"),
             end_timezone=str(payload.get("end_timezone") or "UTC"),
             calendar_id=str(payload.get("calendar_id") or ""),
+            recurring_event_id=(
+                str(payload["recurring_event_id"])
+                if payload.get("recurring_event_id") is not None
+                else None
+            ),
             description=(
                 str(payload["description"])
                 if payload.get("description") is not None
@@ -308,6 +314,7 @@ class BackendClient:
             "start_timezone": event.start_timezone,
             "end_timezone": event.end_timezone,
             "calendar_id": event.calendar_id,
+            "recurring_event_id": event.recurring_event_id,
             "description": event.description,
             "recurrence": event.recurrence,
             "extended_properties": event.extended_properties or {},
