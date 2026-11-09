@@ -468,7 +468,7 @@ def test_list_skips_an_offset_only_non_utc_event(
     service.events.return_value.list.return_value.execute.return_value = {
         "items": [
             _offset_only_resource("offset1"),
-            _resource("valid1"),
+            _resource("valid1", recurrence=None),
         ]
     }
 
@@ -490,10 +490,10 @@ def test_list_follows_pagination_and_skips_all_day_events(
     list_request = service.events.return_value.list
     list_request.return_value.execute.side_effect = [
         {
-            "items": [_all_day_resource(), _resource("first")],
+            "items": [_all_day_resource(), _resource("first", recurrence=None)],
             "nextPageToken": "next-page",
         },
-        {"items": [_resource("second", summary="Second")]},
+        {"items": [_resource("second", summary="Second", recurrence=None)]},
     ]
 
     result = provider.list_events()
@@ -509,6 +509,52 @@ def test_list_follows_pagination_and_skips_all_day_events(
         "showDeleted": False,
     }
     assert second_call.kwargs["pageToken"] == "next-page"
+
+
+def test_list_expands_a_recurring_event_into_occurrences(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A recurring series becomes one event per occurrence."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _primary_calendar_list()
+    )
+    service.events.return_value.list.return_value.execute.return_value = {
+        "items": [_resource("weekly", recurrence=["RRULE:FREQ=WEEKLY;COUNT=3"])],
+    }
+
+    result = provider.list_events()
+
+    assert result.is_ok
+    assert result.value is not None
+    assert [event.id for event in result.value] == [
+        "weekly:2026-11-06T08:00:00+00:00",
+        "weekly:2026-11-13T08:00:00+00:00",
+        "weekly:2026-11-20T08:00:00+00:00",
+    ]
+    assert all(event.recurrence is None for event in result.value)
+    assert result.value[0].summary == "Team standup"
+    assert result.value[0].start_timezone == "Europe/Berlin"
+
+
+def test_list_keeps_the_series_when_the_rule_is_unsupported(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """An unexpandable rule keeps the series event instead of failing the sync."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _primary_calendar_list()
+    )
+    service.events.return_value.list.return_value.execute.return_value = {
+        "items": [_resource("hourly", recurrence=["RRULE:FREQ=HOURLY"])],
+    }
+
+    result = provider.list_events()
+
+    assert result.is_ok
+    assert result.value is not None
+    assert [event.id for event in result.value] == ["hourly"]
+    assert result.value[0].recurrence == ["RRULE:FREQ=HOURLY"]
 
 
 def test_list_stops_when_google_returns_no_items(
@@ -540,8 +586,8 @@ def test_list_reads_every_discovered_calendar_and_tags_events(
     )
     list_request = service.events.return_value.list
     list_request.return_value.execute.side_effect = [
-        {"items": [_resource("primary-event")]},
-        {"items": [_resource("work-event", summary="Work standup")]},
+        {"items": [_resource("primary-event", recurrence=None)]},
+        {"items": [_resource("work-event", summary="Work standup", recurrence=None)]},
     ]
 
     result = provider.list_events()
@@ -681,11 +727,11 @@ def test_list_deduplicates_the_same_event_across_calendars(
     )
     list_request = service.events.return_value.list
     list_request.return_value.execute.side_effect = [
-        {"items": [_resource("shared-event")]},
+        {"items": [_resource("shared-event", recurrence=None)]},
         {
             "items": [
-                _resource("shared-event", summary="Same event elsewhere"),
-                _resource("other-event"),
+                _resource("shared-event", summary="Same event elsewhere", recurrence=None),
+                _resource("other-event", recurrence=None),
             ]
         },
     ]

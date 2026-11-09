@@ -29,6 +29,10 @@ non-zero offset and no ``timeZone`` cannot be mapped to an IANA zone, so
 :meth:`GoogleCalendarProvider.list_events` skips it and
 :meth:`GoogleCalendarProvider.get_event` returns ``INVALID_EVENT``.
 
+Recurring events are expanded into one concrete event per occurrence by
+:func:`~google_calendar.recurrence.expand_event`, so repeats show up as
+separate events in the sync cache and in free-slot searches.
+
 Expected failures are mapped to :class:`~core.errors.Result` values:
 
 ===========  =========================================
@@ -67,6 +71,7 @@ from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
 from core.errors import Error, ErrorCode, Result
 from domain.event import Event
+from google_calendar.recurrence import expand_event
 
 DEFAULT_CALENDAR_ID = "primary"
 MAX_RESULTS = 2500
@@ -221,10 +226,11 @@ class GoogleCalendarProvider:
             if listed.error is not None:
                 return Result.fail(listed.error.code, listed.error.message)
             for event in listed.value or []:
-                if event.id in seen:
-                    continue
-                seen.add(event.id)
-                events.append(event)
+                for candidate in expand_event(event):
+                    if candidate.id in seen:
+                        continue
+                    seen.add(candidate.id)
+                    events.append(candidate)
         return Result.ok(events)
 
     def _calendar_ids(self) -> Result[list[str]]:

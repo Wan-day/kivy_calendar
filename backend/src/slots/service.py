@@ -2,8 +2,8 @@
 
 The source of truth for busy time is Google Calendar, so slot finding reads the
 provider the same way a full sync does.  Only events with a finite duration are
-considered: recurring rules are not expanded yet, so they are skipped here rather
-than guessed at.
+considered; recurring rules that could not be expanded keep their series shape
+and are skipped here rather than guessed at.
 """
 
 from __future__ import annotations

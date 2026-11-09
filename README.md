@@ -116,6 +116,11 @@ Failures are returned as structured JSON error bodies:
   `timeZone` cannot be mapped, so `list_events` skips it and `get_event`
   returns `INVALID_EVENT`. Events created by other clients without an explicit
   zone may therefore be skipped.
+- Recurring events are expanded into one event per occurrence for listing and
+  free-slot searches when the `RRULE` uses a supported frequency (`DAILY`,
+  `WEEKLY`, `MONTHLY`, `YEARLY`) with `INTERVAL`, `COUNT` or `UNTIL`. Open-ended
+  rules expand up to a one-year horizon from the series start, and rules with an
+  unsupported frequency keep the series event.
 - Google `403` responses are treated as retryable upstream errors. `401` and
   OAuth refresh failures are permanent authentication errors.
 
