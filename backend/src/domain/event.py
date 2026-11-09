@@ -25,6 +25,7 @@ class Event(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1, max_length=1024)
+    calendar_id: str = Field(default="", max_length=1024)
     start: datetime
     end: datetime
     start_timezone: str

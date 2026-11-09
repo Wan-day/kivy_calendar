@@ -31,10 +31,12 @@ def _event(
     event_id: str = "event1",
     *,
     summary: str = "Team standup",
+    calendar_id: str = "",
 ) -> Event:
     start = datetime(2026, 11, 6, 9, 0, tzinfo=BERLIN)
     return Event(
         id=event_id,
+        calendar_id=calendar_id,
         summary=summary,
         description="Daily sync",
         start=start,
@@ -69,6 +71,23 @@ def _resource(
     }
     resource.update(overrides)
     return resource
+
+
+def _calendar_item(
+    calendar_id: str = "primary",
+    **overrides: Any,
+) -> dict[str, Any]:
+    item: dict[str, Any] = {"id": calendar_id, "accessRole": "owner"}
+    item.update(overrides)
+    return item
+
+
+def _calendar_list(*items: object) -> dict[str, Any]:
+    return {"items": list(items)}
+
+
+def _primary_calendar_list() -> dict[str, Any]:
+    return _calendar_list(_calendar_item("primary"))
 
 
 def _all_day_resource(event_id: str = "all-day") -> dict[str, Any]:
@@ -150,7 +169,9 @@ def test_create_maps_the_event_to_a_google_payload(
 
     result = provider.create_event(event)
 
-    assert _event_result(result) == event
+    assert _event_result(result) == event.model_copy(
+        update={"calendar_id": "primary"}
+    )
     insert.assert_called_once()
     call = insert.call_args.kwargs
     assert call["calendarId"] == "primary"
@@ -185,7 +206,9 @@ def test_update_patches_the_event_id_and_new_payload(
 
     result = provider.update_event(event)
 
-    assert _event_result(result) == event
+    assert _event_result(result) == event.model_copy(
+        update={"calendar_id": "primary"}
+    )
     service.events.return_value.update.assert_not_called()
     patch.assert_called_once()
     call = patch.call_args.kwargs
@@ -235,22 +258,66 @@ def test_generate_event_id_satisfies_google_constraints() -> None:
     )
 
 
+def test_create_targets_the_event_calendar_when_set(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """An event's own calendar overrides the provider default."""
+    event = _event(calendar_id="work@example.com")
+    insert = service.events.return_value.insert
+    insert.return_value.execute.return_value = _resource()
+
+    result = provider.create_event(event)
+
+    assert insert.call_args.kwargs["calendarId"] == "work@example.com"
+    assert _event_result(result).calendar_id == "work@example.com"
+
+
+def test_update_targets_the_event_calendar_when_set(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """An edit stays in the calendar the event came from."""
+    event = _event(calendar_id="work@example.com")
+    patch = service.events.return_value.patch
+    patch.return_value.execute.return_value = _resource()
+
+    result = provider.update_event(event)
+
+    assert patch.call_args.kwargs["calendarId"] == "work@example.com"
+    assert _event_result(result).calendar_id == "work@example.com"
+
+
 def test_delete_calls_google_and_returns_unit(
     provider: GoogleCalendarProvider,
     service: Mock,
 ) -> None:
-    """Delete uses the event id and treats an empty response as success."""
+    """Delete uses the passed calendar and treats an empty response as success."""
     delete = service.events.return_value.delete
     delete.return_value.execute.return_value = None
 
-    result = provider.delete_event("event1")
+    result = provider.delete_event("work@example.com", "event1")
 
     assert result.is_ok
     assert result.value is None
     assert delete.call_args.kwargs == {
-        "calendarId": "primary",
+        "calendarId": "work@example.com",
         "eventId": "event1",
     }
+
+
+def test_delete_falls_back_to_the_default_calendar(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A blank calendar id uses the provider's configured default."""
+    delete = service.events.return_value.delete
+    delete.return_value.execute.return_value = None
+
+    result = provider.delete_event("", "event1")
+
+    assert result.is_ok
+    assert delete.call_args.kwargs["calendarId"] == "primary"
 
 
 def test_get_maps_private_properties_only(
@@ -266,10 +333,41 @@ def test_get_maps_private_properties_only(
     )
     service.events.return_value.get.return_value.execute.return_value = resource
 
-    result = provider.get_event("event1")
+    result = provider.get_event("primary", "event1")
 
     event = _loaded_event(result)
     assert event.extended_properties == {"color": "blue"}
+
+
+def test_get_uses_the_passed_calendar_and_tags_the_event(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Reads target the requested calendar and keep its id on the event."""
+    get = service.events.return_value.get
+    get.return_value.execute.return_value = _resource()
+
+    event = _loaded_event(provider.get_event("work@example.com", "event1"))
+
+    assert get.call_args.kwargs == {
+        "calendarId": "work@example.com",
+        "eventId": "event1",
+    }
+    assert event.calendar_id == "work@example.com"
+
+
+def test_get_falls_back_to_the_default_calendar(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A blank calendar id reads from the provider's configured default."""
+    get = service.events.return_value.get
+    get.return_value.execute.return_value = _resource()
+
+    event = _loaded_event(provider.get_event("", "event1"))
+
+    assert get.call_args.kwargs["calendarId"] == "primary"
+    assert event.calendar_id == "primary"
 
 
 def test_get_maps_a_timed_event_without_a_description_or_recurrence(
@@ -283,7 +381,7 @@ def test_get_maps_a_timed_event_without_a_description_or_recurrence(
     resource.pop("extendedProperties")
     service.events.return_value.get.return_value.execute.return_value = resource
 
-    result = _loaded_event(provider.get_event("event1"))
+    result = _loaded_event(provider.get_event("primary", "event1"))
 
     assert result.description is None
     assert result.recurrence is None
@@ -301,7 +399,7 @@ def test_get_returns_none_for_a_missing_event(
         status
     )
 
-    result = provider.get_event("missing")
+    result = provider.get_event("primary", "missing")
 
     assert result.is_ok
     assert result.value is None
@@ -316,7 +414,7 @@ def test_get_rejects_an_all_day_event_with_a_clear_error(
         _all_day_resource()
     )
 
-    result = provider.get_event("all-day")
+    result = provider.get_event("primary", "all-day")
 
     assert result.error is not None
     assert result.error.code is ErrorCode.INVALID_EVENT
@@ -335,7 +433,7 @@ def test_get_maps_an_offset_only_utc_event_to_utc(
         )
     )
 
-    event = _loaded_event(provider.get_event("offset1"))
+    event = _loaded_event(provider.get_event("primary", "offset1"))
 
     assert event.start_timezone == "UTC"
     assert event.end_timezone == "UTC"
@@ -352,7 +450,7 @@ def test_get_rejects_an_offset_only_non_utc_event(
         _offset_only_resource()
     )
 
-    result = provider.get_event("offset1")
+    result = provider.get_event("primary", "offset1")
 
     assert result.error is not None
     assert result.error.code is ErrorCode.INVALID_EVENT
@@ -364,6 +462,9 @@ def test_list_skips_an_offset_only_non_utc_event(
     service: Mock,
 ) -> None:
     """One unmappable event does not abort the rest of the sync."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _primary_calendar_list()
+    )
     service.events.return_value.list.return_value.execute.return_value = {
         "items": [
             _offset_only_resource("offset1"),
@@ -383,6 +484,9 @@ def test_list_follows_pagination_and_skips_all_day_events(
     service: Mock,
 ) -> None:
     """Every page is fetched and all-day entries are omitted."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _primary_calendar_list()
+    )
     list_request = service.events.return_value.list
     list_request.return_value.execute.side_effect = [
         {
@@ -412,12 +516,190 @@ def test_list_stops_when_google_returns_no_items(
     service: Mock,
 ) -> None:
     """An empty response is an empty calendar."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _primary_calendar_list()
+    )
     service.events.return_value.list.return_value.execute.return_value = {}
 
     result = provider.list_events()
 
     assert result.is_ok
     assert result.value == []
+
+
+def test_list_reads_every_discovered_calendar_and_tags_events(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Events from all readable calendars are concatenated with their owner."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item("primary"),
+            _calendar_item("work@example.com", accessRole="writer"),
+        )
+    )
+    list_request = service.events.return_value.list
+    list_request.return_value.execute.side_effect = [
+        {"items": [_resource("primary-event")]},
+        {"items": [_resource("work-event", summary="Work standup")]},
+    ]
+
+    result = provider.list_events()
+
+    assert result.is_ok
+    assert result.value is not None
+    assert [event.id for event in result.value] == [
+        "primary-event",
+        "work-event",
+    ]
+    assert result.value[0].calendar_id == "primary"
+    assert result.value[1].calendar_id == "work@example.com"
+    assert [
+        call.kwargs["calendarId"] for call in list_request.call_args_list
+    ] == ["primary", "work@example.com"]
+
+
+def test_calendar_list_follows_pagination(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """The calendar list is paginated like the event list."""
+    calendar_list = service.calendarList.return_value.list
+    calendar_list.return_value.execute.side_effect = [
+        {
+            "items": [_calendar_item("work@example.com")],
+            "nextPageToken": "next-calendar",
+        },
+        {"items": [_calendar_item("shared@example.com", accessRole="reader")]},
+    ]
+    list_request = service.events.return_value.list
+    list_request.return_value.execute.return_value = {}
+
+    result = provider.list_events()
+
+    assert result.is_ok
+    first_call, second_call = calendar_list.call_args_list
+    assert first_call.kwargs == {"maxResults": 2500}
+    assert second_call.kwargs == {
+        "maxResults": 2500,
+        "pageToken": "next-calendar",
+    }
+    assert [
+        call.kwargs["calendarId"] for call in list_request.call_args_list
+    ] == ["primary", "work@example.com", "shared@example.com"]
+
+
+def test_calendar_list_skips_unusable_entries(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Unselected, deleted, read-only-free, and malformed entries are skipped."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item("hidden", selected=False),
+            _calendar_item("deleted", deleted=True),
+            _calendar_item("busy-only", accessRole="freeBusyReader"),
+            {"id": "missing-role"},
+            {"id": "", "accessRole": "owner"},
+            {"accessRole": "owner"},
+            "not-an-object",
+            _calendar_item("work@example.com"),
+        )
+    )
+    list_request = service.events.return_value.list
+    list_request.return_value.execute.return_value = {}
+
+    result = provider.list_events()
+
+    assert result.is_ok
+    assert [
+        call.kwargs["calendarId"] for call in list_request.call_args_list
+    ] == ["primary", "work@example.com"]
+
+
+def test_calendar_list_includes_the_configured_default_first(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """An empty discovery result still reads the configured default calendar."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(_calendar_item("work@example.com"))
+    )
+    list_request = service.events.return_value.list
+    list_request.return_value.execute.return_value = {}
+
+    provider.list_events()
+
+    assert [
+        call.kwargs["calendarId"] for call in list_request.call_args_list
+    ] == ["primary", "work@example.com"]
+
+
+def test_calendar_list_failure_with_a_missing_scope_is_actionable(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """An auth failure explains how to grant the calendar-list scope."""
+    service.calendarList.return_value.list.return_value.execute.side_effect = (
+        _http_error(403)
+    )
+
+    result = provider.list_events()
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.AUTH_ERROR
+    assert "python -m google_calendar.auth" in result.error.message
+    assert "calendar.calendarlist.readonly" in result.error.message
+
+
+def test_calendar_list_refresh_failure_is_actionable(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A refresh failure before calendar discovery points at the helper."""
+    service.calendarList.return_value.list.return_value.execute.side_effect = (
+        RefreshError("invalid_scope")
+    )
+
+    result = provider.list_events()
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.AUTH_ERROR
+    assert "python -m google_calendar.auth" in result.error.message
+
+
+def test_list_deduplicates_the_same_event_across_calendars(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """An event visible through two calendars is returned only once."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item("primary"),
+            _calendar_item("work@example.com"),
+        )
+    )
+    list_request = service.events.return_value.list
+    list_request.return_value.execute.side_effect = [
+        {"items": [_resource("shared-event")]},
+        {
+            "items": [
+                _resource("shared-event", summary="Same event elsewhere"),
+                _resource("other-event"),
+            ]
+        },
+    ]
+
+    result = provider.list_events()
+
+    assert result.is_ok
+    assert result.value is not None
+    assert [event.id for event in result.value] == [
+        "shared-event",
+        "other-event",
+    ]
+    assert result.value[0].calendar_id == "primary"
+    assert result.value[0].summary == "Team standup"
 
 
 @pytest.mark.parametrize(
@@ -495,8 +777,26 @@ def test_list_failures_do_not_escape(
     service: Mock,
 ) -> None:
     """A network failure while listing is returned, not raised."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _primary_calendar_list()
+    )
     service.events.return_value.list.return_value.execute.side_effect = (
         ConnectionError("offline")
+    )
+
+    result = provider.list_events()
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.UPSTREAM_ERROR
+
+
+def test_calendar_list_non_auth_failures_keep_their_mapping(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A server failure during discovery is still an upstream error."""
+    service.calendarList.return_value.list.return_value.execute.side_effect = (
+        _http_error(500)
     )
 
     result = provider.list_events()
@@ -527,7 +827,7 @@ def test_invalid_timed_payload_is_reported(
     resource = _resource(start={"dateTime": "not-a-time", "timeZone": "UTC"})
     service.events.return_value.get.return_value.execute.return_value = resource
 
-    result = provider.get_event("event1")
+    result = provider.get_event("primary", "event1")
 
     assert result.error is not None
     assert result.error.code is ErrorCode.INVALID_EVENT

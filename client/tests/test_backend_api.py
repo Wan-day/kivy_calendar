@@ -54,6 +54,7 @@ def test_list_events_returns_backend_events(monkeypatch: pytest.MonkeyPatch) -> 
                     "end": "2026-11-06T09:30:00+01:00",
                     "start_timezone": "Europe/Berlin",
                     "end_timezone": "Europe/Berlin",
+                    "calendar_id": "work@example.com",
                 },
             ],
         )
@@ -67,6 +68,7 @@ def test_list_events_returns_backend_events(monkeypatch: pytest.MonkeyPatch) -> 
     assert isinstance(event, CalendarEvent)
     assert event.id == "event-1"
     assert event.summary == "Team standup"
+    assert event.calendar_id == "work@example.com"
     assert event.start == datetime.fromisoformat("2026-11-06T09:00:00+01:00")
     assert event.end == datetime.fromisoformat("2026-11-06T09:30:00+01:00")
 
@@ -76,7 +78,7 @@ def test_create_event_posts_the_backend_payload(
 ) -> None:
     """The client sends a client-generated event id to the backend."""
 
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
     def fake_urlopen(
         request: urllib.request.Request,
@@ -84,6 +86,7 @@ def test_create_event_posts_the_backend_payload(
     ) -> _FakeResponse:
         captured["url"] = str(request.full_url)
         captured["method"] = request.get_method()
+        captured["body"] = json.loads(request.data.decode())
         return _FakeResponse(
             {
                 "id": "event-1",
@@ -92,6 +95,7 @@ def test_create_event_posts_the_backend_payload(
                 "end": "2026-11-06T09:30:00+01:00",
                 "start_timezone": "Europe/Berlin",
                 "end_timezone": "Europe/Berlin",
+                "calendar_id": "work@example.com",
             },
         )
 
@@ -104,12 +108,17 @@ def test_create_event_posts_the_backend_payload(
         end=datetime.fromisoformat("2026-11-06T09:30:00+01:00"),
         start_timezone="Europe/Berlin",
         end_timezone="Europe/Berlin",
+        calendar_id="work@example.com",
     )
     created = _client().create_event(event)
 
     assert created.id == "event-1"
+    assert created.calendar_id == "work@example.com"
     assert captured["url"] == f"{BASE_URL}/events"
     assert captured["method"] == "POST"
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["calendar_id"] == "work@example.com"
 
 
 def test_update_event_patches_the_event_url(

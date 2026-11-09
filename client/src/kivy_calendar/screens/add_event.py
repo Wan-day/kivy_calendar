@@ -426,6 +426,7 @@ class AddEventScreen(Screen):
             end=end,
             start_timezone=start_timezone,
             end_timezone=end_timezone,
+            calendar_id=existing.calendar_id if existing is not None else "",
             description=description or None,
             recurrence=existing.recurrence if existing is not None else None,
             extended_properties=(

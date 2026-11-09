@@ -101,6 +101,7 @@ def update_event(
     """Patch an upstream event and refresh the cached copy."""
     updated = Event(
         id=event_id,
+        calendar_id=event.calendar_id,
         start=event.start,
         end=event.end,
         start_timezone=event.start_timezone,

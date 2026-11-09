@@ -52,15 +52,25 @@ class CalendarProvider(Protocol):
         """
         ...
 
-    def delete_event(self, event_id: str) -> Result[None]:
-        """Delete the upstream event with ``event_id``.
+    def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:
+        """Delete the event with ``event_id`` from ``calendar_id``.
 
-        Returns ``NOT_FOUND`` when the calendar does not hold the event.
+        A blank ``calendar_id`` means the implementation's configured default
+        calendar.  Returns ``NOT_FOUND`` when the calendar does not hold the
+        event.
         """
         ...
 
-    def get_event(self, event_id: str) -> Result[Event | None]:
-        """Return the upstream event, or ``None`` when it does not exist."""
+    def get_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+    ) -> Result[Event | None]:
+        """Return an upstream event, or ``None`` when it does not exist.
+
+        A blank ``calendar_id`` means the implementation's configured default
+        calendar.
+        """
         ...
 
     def list_events(self) -> Result[list[Event]]:

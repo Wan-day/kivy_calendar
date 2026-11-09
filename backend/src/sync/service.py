@@ -27,6 +27,7 @@ DEFAULT_RETRY_LEASE = timedelta(minutes=5)
 
 _EVENT_PAYLOAD_KEY = "event"
 _EVENT_ID_PAYLOAD_KEY = "event_id"
+_CALENDAR_ID_PAYLOAD_KEY = "calendar_id"
 
 
 class SyncService:
@@ -75,12 +76,22 @@ class SyncService:
         return result
 
     def update_event(self, event: Event) -> Result[Event]:
-        """Update ``event`` in Google first, then refresh the cached copy."""
-        result = self._provider.update_event(event)
+        """Update ``event`` in Google first, then refresh the cached copy.
+
+        A blank ``calendar_id`` is filled from the cached event so an edit
+        targets the calendar the event came from.  If the cache lookup fails the
+        provider falls back to its configured default calendar.
+        """
+        resolved = event
+        if not event.calendar_id:
+            resolved = event.model_copy(
+                update={"calendar_id": self._cached_calendar_id(event.id)}
+            )
+        result = self._provider.update_event(resolved)
         if result.error is not None:
             return self._queue_failed_write(
                 UPDATE_OPERATION,
-                {_EVENT_PAYLOAD_KEY: event.model_dump(mode="json")},
+                {_EVENT_PAYLOAD_KEY: resolved.model_dump(mode="json")},
                 result.error,
             )
 
@@ -94,12 +105,21 @@ class SyncService:
         return result
 
     def delete_event(self, event_id: str) -> Result[None]:
-        """Delete ``event_id`` in Google first, then drop the cached copy."""
-        result = self._provider.delete_event(event_id)
+        """Delete ``event_id`` in Google first, then drop the cached copy.
+
+        The calendar is taken from the cached event so a delete targets the
+        calendar the event came from.  A missing cache entry falls back to the
+        provider's configured default calendar.
+        """
+        calendar_id = self._cached_calendar_id(event_id)
+        result = self._provider.delete_event(calendar_id, event_id)
         if result.error is not None:
             return self._queue_failed_write(
                 DELETE_OPERATION,
-                {_EVENT_ID_PAYLOAD_KEY: event_id},
+                {
+                    _EVENT_ID_PAYLOAD_KEY: event_id,
+                    _CALENDAR_ID_PAYLOAD_KEY: calendar_id,
+                },
                 result.error,
             )
 
@@ -241,7 +261,7 @@ class SyncService:
         can back off and eventually stop at ``max_attempts`` instead of leaving
         the job ``in_progress`` forever.
         """
-        existing = self._provider.get_event(event.id)
+        existing = self._provider.get_event(event.calendar_id, event.id)
         if existing.error is not None:
             return self._retry_queue.fail(
                 job.id,
@@ -275,7 +295,8 @@ class SyncService:
                 now=now,
             )
 
-        result = self._provider.delete_event(event_id)
+        calendar_id = _calendar_id_from_payload(job.payload)
+        result = self._provider.delete_event(calendar_id, event_id)
         if result.error is not None:
             if result.error.code is ErrorCode.NOT_FOUND:
                 # The event is already gone, which is the outcome we wanted.
@@ -310,6 +331,13 @@ class SyncService:
             _describe_error(error),
             now=now,
         )
+
+    def _cached_calendar_id(self, event_id: str) -> str:
+        """Return the calendar a cached event came from, or blank when unknown."""
+        cached = self._repository.get(event_id)
+        if cached.error is not None or cached.value is None:
+            return ""
+        return cached.value.calendar_id
 
     def _cache_event(self, event: Event) -> None:
         """Best-effort cache refresh after the provider has confirmed a write.
@@ -378,6 +406,12 @@ def _event_id_from_payload(payload: dict[str, Any]) -> str | None:
     if isinstance(event_id, str) and event_id.strip():
         return event_id
     return None
+
+
+def _calendar_id_from_payload(payload: dict[str, Any]) -> str:
+    """Return a delete payload's calendar id, defaulting old jobs to blank."""
+    calendar_id = payload.get(_CALENDAR_ID_PAYLOAD_KEY)
+    return calendar_id if isinstance(calendar_id, str) else ""
 
 
 def _describe_error(error: Error) -> str:
