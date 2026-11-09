@@ -46,18 +46,20 @@ ENV_REFRESH_TOKEN = "GOOGLE_REFRESH_TOKEN"
 def build_credentials(
     environ: Mapping[str, str] | None = None,
     *,
-    scopes: Sequence[str] = CALENDAR_SCOPES,
+    scopes: str | Sequence[str] = CALENDAR_SCOPES,
 ) -> Result[Credentials]:
     """Build refreshable credentials from the Google OAuth environment.
 
     ``environ`` defaults to :data:`os.environ`.  Missing or blank variables are
     reported as ``INVALID_ARGUMENT`` instead of raising, because configuration
-    errors are an expected failure at this boundary.
+    errors are an expected failure at this boundary.  A single scope string is
+    accepted and kept whole; it must not be split into individual characters.
     """
     environment = os.environ if environ is None else environ
     client_id = _environment_value(environment, ENV_CLIENT_ID)
     client_secret = _environment_value(environment, ENV_CLIENT_SECRET)
     refresh_token = _environment_value(environment, ENV_REFRESH_TOKEN)
+    resolved_scopes = [scopes] if isinstance(scopes, str) else list(scopes)
 
     missing = [
         name
@@ -81,7 +83,7 @@ def build_credentials(
             token_uri=GOOGLE_TOKEN_URI,
             client_id=client_id,
             client_secret=client_secret,
-            scopes=list(scopes),
+            scopes=resolved_scopes,
         )
     except (TypeError, ValueError) as exc:
         return Result.fail(

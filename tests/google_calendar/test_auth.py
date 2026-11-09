@@ -50,6 +50,16 @@ def test_build_credentials_returns_refreshable_credentials() -> None:
     assert credentials.scopes == ["scope-a", "scope-b"]
 
 
+def test_build_credentials_accepts_a_single_scope_string() -> None:
+    """A single scope string is kept whole instead of split into characters."""
+    result = auth.build_credentials(ENVIRON, scopes=auth.CALENDAR_EVENTS_SCOPE)
+
+    assert result.is_ok
+    credentials = result.value
+    assert credentials is not None
+    assert credentials.scopes == [auth.CALENDAR_EVENTS_SCOPE]
+
+
 def test_obtain_refresh_token_runs_the_installed_app_flow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

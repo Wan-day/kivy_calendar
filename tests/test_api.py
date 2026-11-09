@@ -5,13 +5,15 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from api.app import create_app
+from api.app import _build_default_provider, create_app
+from api.unavailable_provider import UnavailableCalendarProvider
 from cache.repository import EventRepository
 from core.config import Settings
-from core.errors import ErrorCode
+from core.errors import ErrorCode, Result
 from core.sqlite import Database
 from domain.event import Event
 from fastapi.testclient import TestClient
+from google_calendar.auth import CALENDAR_SCOPES
 from google_calendar.fake import FakeCalendarProvider
 from google_calendar.provider import ProviderOperation
 from httpx import Response
@@ -64,6 +66,31 @@ def _error_code(response: Response) -> str:
     error = body["error"]
     assert "code" in error, error
     return error["code"]
+
+
+def test_default_provider_requests_the_full_calendar_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The app wires a scope sequence, not a string split into characters."""
+    import api.app as app_module
+
+    captured: dict[str, object] = {}
+
+    def fake_build_credentials(environ: object, *, scopes: object) -> object:
+        captured["scopes"] = scopes
+        return Result.fail(ErrorCode.INVALID_ARGUMENT, "stop before Google")
+
+    monkeypatch.setattr(app_module, "build_credentials", fake_build_credentials)
+    settings = Settings(
+        google_client_id="client-id",
+        google_client_secret="client-secret",
+        google_refresh_token="refresh-token",
+    )
+
+    provider = _build_default_provider(settings)
+
+    assert captured["scopes"] == CALENDAR_SCOPES
+    assert isinstance(provider, UnavailableCalendarProvider)
 
 
 @pytest.fixture

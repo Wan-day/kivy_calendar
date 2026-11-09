@@ -17,7 +17,7 @@ from api.router import api_router
 from api.unavailable_provider import UnavailableCalendarProvider
 from cache.repository import EventRepository
 from core.config import Settings, get_settings
-from google_calendar.auth import CALENDAR_EVENTS_SCOPE, build_credentials
+from google_calendar.auth import CALENDAR_SCOPES, build_credentials
 from google_calendar.google_provider import GoogleCalendarProvider
 from google_calendar.provider import CalendarProvider
 from retry.queue import RetryQueue
@@ -32,7 +32,7 @@ def _build_default_provider(settings: Settings) -> CalendarProvider:
         "GOOGLE_CLIENT_SECRET": settings.google_client_secret,
         "GOOGLE_REFRESH_TOKEN": settings.google_refresh_token,
     }
-    credentials_result = build_credentials(environ, scopes=CALENDAR_EVENTS_SCOPE)
+    credentials_result = build_credentials(environ, scopes=CALENDAR_SCOPES)
     if credentials_result.is_ok and credentials_result.value is not None:
         provider_result = GoogleCalendarProvider.from_credentials(
             credentials_result.value,
