@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -24,6 +26,8 @@ from retry.queue import RetryQueue
 from slots.service import SlotService
 from sync.service import SyncService
 
+logger = logging.getLogger(__name__)
+
 
 def _build_default_provider(settings: Settings) -> CalendarProvider:
     """Build a Google provider from settings, or an unavailable fake."""
@@ -32,6 +36,7 @@ def _build_default_provider(settings: Settings) -> CalendarProvider:
         "GOOGLE_CLIENT_SECRET": settings.google_client_secret,
         "GOOGLE_REFRESH_TOKEN": settings.google_refresh_token,
     }
+    reason = "Google credentials could not be built"
     credentials_result = build_credentials(environ, scopes=CALENDAR_SCOPES)
     if credentials_result.is_ok and credentials_result.value is not None:
         provider_result = GoogleCalendarProvider.from_credentials(
@@ -40,7 +45,14 @@ def _build_default_provider(settings: Settings) -> CalendarProvider:
         )
         if provider_result.is_ok and provider_result.value is not None:
             return provider_result.value
-    return UnavailableCalendarProvider()
+        if provider_result.error is not None:
+            reason = provider_result.error.message
+        else:
+            reason = "Google provider could not be created"
+    elif credentials_result.error is not None:
+        reason = credentials_result.error.message
+    logger.warning("Google Calendar provider is unavailable: %s", reason)
+    return UnavailableCalendarProvider(reason)
 
 
 def create_app(
