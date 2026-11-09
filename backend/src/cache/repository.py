@@ -22,6 +22,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY NOT NULL,
     calendar_id TEXT NOT NULL DEFAULT '',
+    recurring_event_id TEXT NOT NULL DEFAULT '',
     summary TEXT NOT NULL,
     start_utc TEXT NOT NULL,
     start_timezone TEXT NOT NULL,
@@ -39,6 +40,7 @@ CREATE INDEX IF NOT EXISTS idx_events_start_utc ON events (start_utc);
 _COLUMNS = (
     "id",
     "calendar_id",
+    "recurring_event_id",
     "summary",
     "start_utc",
     "start_timezone",
@@ -55,6 +57,7 @@ _INSERT = f"INSERT INTO events ({_COLUMN_LIST}) VALUES ({_PLACEHOLDERS})"
 _UPDATE = """
 UPDATE events
 SET calendar_id = ?,
+    recurring_event_id = ?,
     summary = ?,
     start_utc = ?,
     start_timezone = ?,
@@ -211,6 +214,11 @@ def _migrate(connection: sqlite3.Connection) -> None:
         connection.execute(
             "ALTER TABLE events ADD COLUMN calendar_id TEXT NOT NULL DEFAULT ''"
         )
+    if "recurring_event_id" not in columns:
+        connection.execute(
+            "ALTER TABLE events ADD COLUMN recurring_event_id "
+            "TEXT NOT NULL DEFAULT ''"
+        )
 
 
 def _event_values(event: Event) -> tuple[object, ...]:
@@ -218,6 +226,7 @@ def _event_values(event: Event) -> tuple[object, ...]:
     return (
         event.id,
         event.calendar_id,
+        event.recurring_event_id or "",
         event.summary,
         event.start.astimezone(UTC).isoformat(),
         event.start_timezone,
@@ -239,9 +248,13 @@ def _row_to_event(row: sqlite3.Row) -> Event:
     )
     end = datetime.fromisoformat(row["end_utc"]).astimezone(ZoneInfo(end_timezone))
     calendar_id = row["calendar_id"] if "calendar_id" in row.keys() else ""
+    recurring_event_id = (
+        row["recurring_event_id"] if "recurring_event_id" in row.keys() else ""
+    )
     return Event(
         id=row["id"],
         calendar_id=calendar_id,
+        recurring_event_id=recurring_event_id or None,
         summary=row["summary"],
         start=start,
         end=end,

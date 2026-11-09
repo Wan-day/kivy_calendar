@@ -141,11 +141,24 @@ class GoogleCalendarProvider:
         return Result.ok(cls(service, calendar_id))
 
     def create_event(self, event: Event) -> Result[Event]:
-        """Insert ``event`` with its client-generated id."""
+        """Insert ``event`` with its client-generated id, or as a series override.
+
+        An event that carries a ``recurring_event_id`` targets one occurrence
+        slot of a recurring series, so the Google insert creates or replaces that
+        override instead of creating a standalone event.
+        """
+        calendar_id = event.calendar_id or self._calendar_id
+        if event.recurring_event_id:
+            return self._event_request(
+                lambda: self._service.events().insert(
+                    calendarId=calendar_id,
+                    body=_event_to_payload(event),
+                ),
+                calendar_id,
+            )
         invalid = _event_id_error(event.id)
         if invalid is not None:
             return Result.fail(invalid.code, invalid.message)
-        calendar_id = event.calendar_id or self._calendar_id
         return self._event_request(
             lambda: self._service.events().insert(
                 calendarId=calendar_id,
@@ -155,15 +168,26 @@ class GoogleCalendarProvider:
         )
 
     def update_event(self, event: Event) -> Result[Event]:
-        """Patch the upstream event that has the same id.
+        """Patch the upstream event that has the same id, or an occurrence slot.
 
         ``patch`` only changes the fields the backend sends, so data this
         adapter does not model (location, attendees, reminders, ...) survives.
+
+        An event that carries a ``recurring_event_id`` edits one occurrence slot
+        of a recurring series through an override instead of patching the series.
         """
+        calendar_id = event.calendar_id or self._calendar_id
+        if event.recurring_event_id:
+            return self._event_request(
+                lambda: self._service.events().insert(
+                    calendarId=calendar_id,
+                    body=_event_to_payload(event),
+                ),
+                calendar_id,
+            )
         invalid = _event_id_error(event.id)
         if invalid is not None:
             return Result.fail(invalid.code, invalid.message)
-        calendar_id = event.calendar_id or self._calendar_id
         return self._event_request(
             lambda: self._service.events().patch(
                 calendarId=calendar_id,
@@ -346,7 +370,6 @@ def _event_id_error(event_id: str) -> Error | None:
 def _event_to_payload(event: Event) -> dict[str, Any]:
     """Map the domain event onto a Google Calendar ``events`` payload."""
     payload: dict[str, Any] = {
-        "id": event.id,
         "summary": event.summary,
         "start": {
             "dateTime": event.start.isoformat(),
@@ -358,10 +381,15 @@ def _event_to_payload(event: Event) -> dict[str, Any]:
         },
         "extendedProperties": {"private": dict(event.extended_properties)},
     }
+    if event.recurring_event_id:
+        # An occurrence edit targets one slot of a recurring series.
+        payload["recurringEventId"] = event.recurring_event_id
+    else:
+        payload["id"] = event.id
+        if event.recurrence is not None:
+            payload["recurrence"] = list(event.recurrence)
     if event.description is not None:
         payload["description"] = event.description
-    if event.recurrence is not None:
-        payload["recurrence"] = list(event.recurrence)
     return payload
 
 
@@ -430,6 +458,13 @@ def _event_from_resource(raw: object, calendar_id: str) -> Result[Event]:
             )
         private_properties = dict(private)
 
+    recurring_event_id = raw.get("recurringEventId")
+    if recurring_event_id is not None and not isinstance(recurring_event_id, str):
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"event {event_id!r} has an invalid recurring event id",
+        )
+
     start = _resource_time(raw.get("start"), "start")
     if start.error is not None:
         return Result.fail(start.error.code, start.error.message)
@@ -449,6 +484,7 @@ def _event_from_resource(raw: object, calendar_id: str) -> Result[Event]:
             Event(
                 id=event_id,
                 calendar_id=calendar_id,
+                recurring_event_id=recurring_event_id,
                 summary=summary,
                 description=description,
                 start=start_time,

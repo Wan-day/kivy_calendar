@@ -26,6 +26,7 @@ class Event(BaseModel):
 
     id: str = Field(min_length=1, max_length=1024)
     calendar_id: str = Field(default="", max_length=1024)
+    recurring_event_id: str | None = Field(default=None, max_length=1024)
     start: datetime
     end: datetime
     start_timezone: str

@@ -135,6 +135,7 @@ def _occurrence(event: Event, start: datetime, duration: timedelta) -> Event:
     return Event(
         id=f"{event.id}:{start.astimezone(UTC).isoformat()}",
         calendar_id=event.calendar_id,
+        recurring_event_id=event.id,
         summary=event.summary,
         description=event.description,
         start=start,

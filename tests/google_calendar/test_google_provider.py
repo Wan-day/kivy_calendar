@@ -288,6 +288,63 @@ def test_update_targets_the_event_calendar_when_set(
     assert _event_result(result).calendar_id == "work@example.com"
 
 
+def test_create_event_targets_a_series_override_when_set(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """An event that names a series saves the occurrence slot instead."""
+    event = _event()
+    event.recurring_event_id = "series-1"
+    insert = service.events.return_value.insert
+    insert.return_value.execute.return_value = _resource(recurringEventId="series-1")
+
+    result = provider.create_event(event)
+
+    assert result.is_ok
+    insert.assert_called_once()
+    call = insert.call_args.kwargs
+    assert call["calendarId"] == "primary"
+    assert call["body"]["recurringEventId"] == "series-1"
+    assert "id" not in call["body"]
+
+
+def test_update_event_targets_a_series_override_when_set(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """An edited occurrence is saved through its series override."""
+    event = _event()
+    event.recurring_event_id = "series-1"
+    insert = service.events.return_value.insert
+    insert.return_value.execute.return_value = _resource(recurringEventId="series-1")
+
+    result = provider.update_event(event)
+
+    assert result.is_ok
+    service.events.return_value.patch.assert_not_called()
+    insert.assert_called_once()
+    call = insert.call_args.kwargs
+    assert call["calendarId"] == "primary"
+    assert call["body"]["recurringEventId"] == "series-1"
+    assert "id" not in call["body"]
+
+
+def test_get_maps_the_recurring_event_id(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A returned occurrence keeps the id of the series it belongs to."""
+    service.events.return_value.get.return_value.execute.return_value = _resource(
+        recurringEventId="series-1",
+    )
+
+    result = provider.get_event("primary", "event1")
+
+    assert result.is_ok
+    assert result.value is not None
+    assert result.value.recurring_event_id == "series-1"
+
+
 def test_delete_calls_google_and_returns_unit(
     provider: GoogleCalendarProvider,
     service: Mock,
