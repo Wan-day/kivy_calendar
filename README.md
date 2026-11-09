@@ -4,15 +4,15 @@ A calendar app to track things easier
 
 ## Status
 
-The backend foundations and the FastAPI calendar API are implemented, and a
-basic Kivy client UI has been scaffolded.
+The backend foundations, the FastAPI calendar API, and a basic runnable Kivy
+client are implemented.
 
 - **Backend**: domain event model, SQLite cache, durable retry queue, Google
   Calendar provider (list/create/patch/delete), OAuth credential helper, a
   write-through sync service, and a FastAPI app exposing `/health`, the
   `/events` CRUD routes, and the `/sync` route behind bearer-token auth.
-- **Client**: basic Kivy app (`client/src/kivy_calendar`) with an event list
-  and an add-event screen that talk to the backend API.
+- **Client**: Kivy app (`client/src/kivy_calendar`) with an event list, a
+  refresh action, and an add-event form that talk to the backend API.
 - **Tests**: backend unit tests use an in-memory fake provider and never call
   Google or touch a real calendar.
 
@@ -48,6 +48,28 @@ PYTHONPATH=backend/src python -m google_calendar.auth
 Copy the printed `GOOGLE_REFRESH_TOKEN` into `.env`. The helper requests only
 `https://www.googleapis.com/auth/calendar.events` and does not use a public web
 redirect.
+
+## Running the client
+
+The Kivy client talks to the backend over HTTP. Install it into the project
+virtual environment:
+
+```sh
+python -m pip install -e ./client
+```
+
+Point it at the running backend and give it the same API token the backend
+expects:
+
+```sh
+export BACKEND_API_TOKEN=...
+export KIVY_CALENDAR_API_BASE_URL=http://127.0.0.1:8000
+python -m kivy_calendar
+```
+
+`KIVY_CALENDAR_API_BASE_URL` defaults to `http://localhost:8000`. Without
+`BACKEND_API_TOKEN` the window still opens, but it shows a configuration
+message instead of the event list.
 
 ## Backend API
 
