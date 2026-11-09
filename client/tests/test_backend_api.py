@@ -12,7 +12,7 @@ from typing import Literal, Self
 
 import pytest
 
-from kivy_calendar.api import BackendClient, BackendError, CalendarEvent
+from kivy_calendar.api import BackendClient, BackendError, CalendarEvent, FreeSlot
 
 BASE_URL = "http://backend.test"
 
@@ -202,3 +202,175 @@ def test_list_events_raises_backend_error_on_http_failure(
     assert exc_info.value.status_code == 404
     assert exc_info.value.code == "not_found"
     assert exc_info.value.message == "not cached"
+
+
+def test_sync_posts_and_returns_the_synced_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The client asks the backend to sync and returns the event count."""
+
+    captured: dict[str, str] = {}
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        captured["url"] = str(request.full_url)
+        captured["method"] = request.get_method()
+        return _FakeResponse({"synced": 4})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    assert _client().sync() == 4
+    assert captured["url"] == f"{BASE_URL}/sync"
+    assert captured["method"] == "POST"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {},
+        {"synced": "4"},
+        {"synced": True},
+        {"synced": None},
+    ],
+)
+def test_sync_rejects_a_malformed_response(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: object,
+) -> None:
+    """A response without an integer synced count is a backend error."""
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(BackendError) as exc_info:
+        _client().sync()
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.code == "invalid_response"
+
+
+def test_find_free_slots_posts_the_window_and_parses_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The client sends the request body and maps slots into values."""
+
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        captured["url"] = str(request.full_url)
+        captured["method"] = request.get_method()
+        captured["body"] = json.loads(request.data.decode())
+        return _FakeResponse(
+            {
+                "slots": [
+                    {
+                        "start": "2026-11-09T09:00:00+01:00",
+                        "end": "2026-11-09T09:30:00+01:00",
+                    },
+                    {
+                        "start": "2026-11-10T14:00:00+01:00",
+                        "end": "2026-11-10T14:30:00+01:00",
+                    },
+                ],
+            },
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    window_start = datetime.fromisoformat("2026-11-09T08:00:00+01:00")
+    window_end = datetime.fromisoformat("2026-11-16T08:00:00+01:00")
+
+    slots = _client().find_free_slots(
+        30,
+        window_start,
+        window_end,
+        "Europe/Berlin",
+    )
+
+    assert slots == [
+        FreeSlot(
+            start=datetime.fromisoformat("2026-11-09T09:00:00+01:00"),
+            end=datetime.fromisoformat("2026-11-09T09:30:00+01:00"),
+        ),
+        FreeSlot(
+            start=datetime.fromisoformat("2026-11-10T14:00:00+01:00"),
+            end=datetime.fromisoformat("2026-11-10T14:30:00+01:00"),
+        ),
+    ]
+    assert captured["url"] == f"{BASE_URL}/slots/free"
+    assert captured["method"] == "POST"
+    assert captured["body"] == {
+        "duration_minutes": 30,
+        "window_start": "2026-11-09T08:00:00+01:00",
+        "window_end": "2026-11-16T08:00:00+01:00",
+        "time_zone": "Europe/Berlin",
+    }
+
+
+def test_find_free_slots_rejects_naive_window_times() -> None:
+    """A window without a time zone never reaches the backend."""
+    with pytest.raises(BackendError) as exc_info:
+        _client().find_free_slots(
+            30,
+            datetime(2026, 11, 9, 8, 0),
+            datetime(2026, 11, 16, 8, 0),
+            "Europe/Berlin",
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.code == "invalid_event"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {},
+        {"slots": "nope"},
+        {"slots": ["nope"]},
+        {"slots": [{"start": "not-a-date", "end": "not-a-date"}]},
+        {
+            "slots": [
+                {
+                    "start": "2026-11-09T09:00:00",
+                    "end": "2026-11-09T09:30:00",
+                },
+            ],
+        },
+    ],
+)
+def test_find_free_slots_rejects_a_malformed_response(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: object,
+) -> None:
+    """A non-list or malformed slot list is a backend error."""
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    with pytest.raises(BackendError) as exc_info:
+        _client().find_free_slots(
+            30,
+            datetime.fromisoformat("2026-11-09T08:00:00+01:00"),
+            datetime.fromisoformat("2026-11-16T08:00:00+01:00"),
+            "Europe/Berlin",
+        )
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.code == "invalid_response"
+
