@@ -24,19 +24,49 @@ BERLIN = ZoneInfo("Europe/Berlin")
 class FakeClient:
     """Minimal backend client double for the screen tests."""
 
+    def __init__(self) -> None:
+        self.created: list[Any] = []
+        self.updated: list[Any] = []
+        self.deleted: list[str] = []
+
     def create_event(self, event: Any) -> Any:
-        """Return the event unchanged."""
+        """Record a create and return the event unchanged."""
+        self.created.append(event)
         return event
+
+    def update_event(self, event: Any) -> Any:
+        """Record an update and return the event unchanged."""
+        self.updated.append(event)
+        return event
+
+    def delete_event(self, event_id: str) -> None:
+        """Record a delete."""
+        self.deleted.append(event_id)
 
     def list_events(self) -> list[Any]:
         """Return no events."""
         return []
 
 
+def _sample_event() -> Any:
+    from kivy_calendar.api import CalendarEvent
+
+    return CalendarEvent(
+        id="event-1",
+        summary="Standup",
+        start=datetime(2026, 11, 9, 9, 0, tzinfo=BERLIN),
+        end=datetime(2026, 11, 9, 10, 0, tzinfo=BERLIN),
+        start_timezone="Europe/Berlin",
+        end_timezone="Europe/Berlin",
+        recurrence=["FREQ=WEEKLY"],
+        extended_properties={"source": "kivy-calendar"},
+    )
+
+
 def _make_screens(
     client: FakeClient | None = None,
 ) -> tuple[Any, Any, Any]:
-    """Build a screen manager with the main and add-event screens."""
+    """Build a screen manager with the main and event-form screens."""
     from kivy.uix.screenmanager import ScreenManager
 
     from kivy_calendar.screens.add_event import AddEventScreen
@@ -76,25 +106,36 @@ def test_main_screen_without_a_client_shows_configuration_error() -> None:
 def test_main_screen_lists_events() -> None:
     """Events returned by the backend become rows in the event list."""
     _, main_screen, _ = _make_screens(FakeClient())
-    start = datetime(2026, 11, 9, 9, 0, tzinfo=BERLIN)
 
-    from kivy_calendar.api import CalendarEvent
-
-    main_screen._show_events(
-        [
-            CalendarEvent(
-                id="event-1",
-                summary="Standup",
-                start=start,
-                end=start.replace(hour=10),
-                start_timezone="Europe/Berlin",
-                end_timezone="Europe/Berlin",
-            )
-        ]
-    )
+    main_screen._show_events([_sample_event()])
 
     assert len(main_screen.event_list.children) == 1
     assert main_screen.status_label.text == "1 event"
+
+
+def test_tapping_an_event_opens_the_form_in_edit_mode() -> None:
+    """Tapping a row opens the form with the event loaded."""
+    manager, main_screen, add_event_screen = _make_screens(FakeClient())
+    event = _sample_event()
+    main_screen._show_events([event])
+    row = main_screen.event_list.children[0]
+
+    row.dispatch("on_release")
+
+    assert manager.current == "add_event"
+    assert add_event_screen.event is event
+    assert add_event_screen.summary.text == "Standup"
+    assert not add_event_screen.delete_button.disabled
+
+
+def test_new_event_form_disables_delete() -> None:
+    """A new event cannot be deleted before it exists."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+
+    add_event_screen.open_for(None)
+
+    assert add_event_screen.delete_button.disabled
+    assert add_event_screen.title_label.text == "New event"
 
 
 def test_add_event_rejects_a_naive_start() -> None:
@@ -132,3 +173,43 @@ def test_add_event_builds_a_valid_event() -> None:
     assert event.summary == "Dentist"
     assert event.id
     assert event.end > event.start
+
+
+def test_edit_form_keeps_the_id_and_hidden_fields() -> None:
+    """Editing keeps the backend id, recurrence and extended properties."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    original = _sample_event()
+    add_event_screen.open_for(original)
+    add_event_screen.summary.text = "Standup (moved)"
+
+    event = add_event_screen._build_event()
+
+    assert event is not None
+    assert event.id == original.id
+    assert event.summary == "Standup (moved)"
+    assert event.recurrence == original.recurrence
+    assert event.extended_properties == original.extended_properties
+
+
+def test_editing_saves_through_update_event() -> None:
+    """Editing an event uses PATCH rather than create."""
+    client = FakeClient()
+    _, _, add_event_screen = _make_screens(client)
+    event = _sample_event()
+    add_event_screen.open_for(event)
+
+    add_event_screen._persist_event(client, event, editing=True)
+
+    assert client.updated == [event]
+    assert client.created == []
+
+
+def test_deleting_sends_the_event_id() -> None:
+    """Deleting an event calls the backend with its id."""
+    client = FakeClient()
+    _, _, add_event_screen = _make_screens(client)
+    add_event_screen.open_for(_sample_event())
+
+    add_event_screen._delete_event(client, "event-1")
+
+    assert client.deleted == ["event-1"]

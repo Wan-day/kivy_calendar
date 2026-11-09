@@ -12,7 +12,8 @@ client are implemented.
   write-through sync service, and a FastAPI app exposing `/health`, the
   `/events` CRUD routes, and the `/sync` route behind bearer-token auth.
 - **Client**: Kivy app (`client/src/kivy_calendar`) with an event list, a
-  refresh action, and an add-event form that talk to the backend API.
+  refresh action, and an add/edit form with delete confirmation. Tap an event
+  to edit or delete it.
 - **Tests**: backend unit tests use an in-memory fake provider and never call
   Google or touch a real calendar.
 
