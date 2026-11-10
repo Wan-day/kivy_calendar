@@ -121,6 +121,18 @@ def test_recurring_event_id_round_trips_through_the_cache(
     assert loaded.recurring_event_id == "series-1"
 
 
+def test_all_day_round_trips_through_the_cache(
+    repository: EventRepository,
+) -> None:
+    """An all-day flag is preserved when the cache is read back."""
+    event = _event().model_copy(update={"all_day": True})
+
+    assert repository.create(event).is_ok
+
+    loaded = _cached(repository.get(event.id))
+    assert loaded.all_day is True
+
+
 def test_old_cache_is_migrated_with_a_blank_calendar_id(tmp_path: Path) -> None:
     """Opening an old database adds the calendar_id column without losing rows."""
     database = Database(tmp_path / "old" / "calendar.db")

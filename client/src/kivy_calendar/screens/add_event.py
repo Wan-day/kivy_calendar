@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from kivy.clock import Clock
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
+from kivy.uix.checkbox import CheckBox
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import Screen
 from kivy.uix.scrollview import ScrollView
@@ -48,6 +49,26 @@ def _field(caption: str, widget: Any) -> BoxLayout:
     )
     box.add_widget(widget)
     return box
+
+
+def _field_with_label(caption: str, widget: Any) -> tuple[BoxLayout, Any]:
+    """Stack a caption above a fixed-height form input and return it."""
+    box = BoxLayout(
+        orientation="vertical",
+        size_hint_y=None,
+        height=widget.height + 24,
+        spacing=2,
+    )
+    label = wrapped_label(
+        text=caption,
+        size_hint_y=None,
+        height=18,
+        font_size="13sp",
+        color=STATUS_COLOR,
+    )
+    box.add_widget(label)
+    box.add_widget(widget)
+    return box, label
 
 
 def _input(
@@ -92,6 +113,7 @@ class AddEventScreen(Screen):
         self.start_timezone = _input("")
         self.end_timezone = _input("")
         self.description = _input("Optional notes", height=88, multiline=True)
+        self.all_day = CheckBox(size_hint=(None, None), size=(44, 44))
 
         form = BoxLayout(
             orientation="vertical",
@@ -101,11 +123,38 @@ class AddEventScreen(Screen):
         )
         form.bind(minimum_height=form.setter("height"))
         form.add_widget(_field("Summary", self.summary))
-        form.add_widget(_field("Start (ISO datetime with offset)", self.start))
-        form.add_widget(_field("End (ISO datetime with offset)", self.end))
+
+        all_day_row = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=44,
+            spacing=8,
+        )
+        all_day_row.add_widget(self.all_day)
+        all_day_row.add_widget(
+            wrapped_label(
+                text="All day",
+                size_hint_y=None,
+                height=44,
+                font_size="14sp",
+                color=STATUS_COLOR,
+            )
+        )
+        form.add_widget(all_day_row)
+
+        self._start_field, self._start_label = _field_with_label(
+            "Start (ISO datetime with offset)", self.start
+        )
+        self._end_field, self._end_label = _field_with_label(
+            "End (ISO datetime with offset)", self.end
+        )
+        form.add_widget(self._start_field)
+        form.add_widget(self._end_field)
         form.add_widget(_field("Start time zone (IANA name)", self.start_timezone))
         form.add_widget(_field("End time zone (IANA name)", self.end_timezone))
         form.add_widget(_field("Description", self.description))
+
+        self.all_day.bind(active=self._on_all_day_changed)
         scroll_view = ScrollView(bar_width=6)
         scroll_view.add_widget(form)
 
@@ -163,12 +212,22 @@ class AddEventScreen(Screen):
             self._reset_form()
         else:
             self.title_label.text = "Edit event"
+            self.all_day.active = event.all_day
             self.summary.text = event.summary
-            self.start.text = to_input_value(event.start)
-            self.end.text = to_input_value(event.end)
+            if event.all_day:
+                self.start.text = event.start.date().isoformat()
+                # The end is exclusive for all-day events.
+                end_day = event.end.date() - timedelta(days=1)
+                if end_day < event.start.date():
+                    end_day = event.start.date()
+                self.end.text = end_day.isoformat()
+            else:
+                self.start.text = to_input_value(event.start)
+                self.end.text = to_input_value(event.end)
             self.start_timezone.text = event.start_timezone
             self.end_timezone.text = event.end_timezone
             self.description.text = event.description or ""
+            self._apply_all_day_mode(event.all_day)
         self._set_buttons_enabled(True)
         self._set_status("")
 
@@ -224,6 +283,11 @@ class AddEventScreen(Screen):
 
     def suggest_free_time(self, *args: Any) -> None:
         """Ask the backend for a free window and fill the form with it."""
+        if self.all_day.active:
+            self._set_status(
+                "Free-time suggestions are not available for all-day events."
+            )
+            return
         client = self.client
         if client is None:
             self._set_status("Backend client is not configured.", error=True)
@@ -253,6 +317,8 @@ class AddEventScreen(Screen):
 
     def _duration_minutes(self) -> int:
         """Return the form duration, or an hour when the times are unusable."""
+        if self.all_day.active:
+            return 24 * 60
         try:
             start = datetime.fromisoformat(self.start.text.strip())
             end = datetime.fromisoformat(self.end.text.strip())
@@ -302,6 +368,40 @@ class AddEventScreen(Screen):
         self.start.text = to_input_value(slot.start)
         self.end.text = to_input_value(slot.end)
         self._set_status("Suggested a free time.")
+
+    def _on_all_day_changed(self, instance: CheckBox, value: bool) -> None:
+        """Switch the form between timed and all-day input."""
+        self._apply_all_day_mode(value)
+        if value:
+            # Convert the current values to whole-day bounds when possible.
+            try:
+                text = self.start.text.strip()
+                if "T" in text:
+                    start_day = datetime.fromisoformat(text).date()
+                else:
+                    start_day = date.fromisoformat(text)
+            except ValueError:
+                start_day = datetime.now().astimezone().date()
+            self.start.text = start_day.isoformat()
+            self.end.text = start_day.isoformat()
+        else:
+            start, end = default_event_times()
+            self.start.text = to_input_value(start)
+            self.end.text = to_input_value(end)
+
+    def _apply_all_day_mode(self, all_day: bool) -> None:
+        """Update field hints and captions for the chosen event kind."""
+        if all_day:
+            self.start.hint_text = "2026-11-09"
+            self.end.hint_text = "2026-11-09"
+            self._start_label.text = "Start date (YYYY-MM-DD)"
+            self._end_label.text = "End date (YYYY-MM-DD, inclusive)"
+        else:
+            self.start.hint_text = ""
+            self.end.hint_text = ""
+            self._start_label.text = "Start (ISO datetime with offset)"
+            self._end_label.text = "End (ISO datetime with offset)"
+        self.suggest_button.disabled = all_day or self.save_button.disabled
 
     def confirm_delete(self, *args: Any) -> None:
         """Ask for confirmation before deleting the current event."""
@@ -393,32 +493,62 @@ class AddEventScreen(Screen):
 
     def _build_event(self) -> CalendarEvent | None:
         """Turn the form values into an event, reporting invalid input."""
-        try:
-            start = datetime.fromisoformat(self.start.text.strip())
-            end = datetime.fromisoformat(self.end.text.strip())
-        except ValueError:
-            self._set_status(
-                "Use ISO times such as 2026-11-09T14:00+01:00.",
-                error=True,
-            )
-            return None
-        if start.tzinfo is None or end.tzinfo is None:
-            self._set_status(
-                "Start and end must include a UTC offset or zone.",
-                error=True,
-            )
-            return None
-        start_timezone = self.start_timezone.text.strip() or self.time_zone
-        end_timezone = self.end_timezone.text.strip() or self.time_zone
-        for time_zone in (start_timezone, end_timezone):
-            if not self._is_known_time_zone(time_zone):
-                self._set_status(f"Unknown time zone: {time_zone}", error=True)
-                return None
-        if end <= start:
-            self._set_status("End must be after start.", error=True)
-            return None
         existing = self.event
         description = self.description.text.strip()
+        start_timezone = self.start_timezone.text.strip() or self.time_zone
+        end_timezone = self.end_timezone.text.strip() or self.time_zone
+        if self.all_day.active:
+            try:
+                start_day = date.fromisoformat(self.start.text.strip())
+                end_day = date.fromisoformat(self.end.text.strip())
+            except ValueError:
+                self._set_status(
+                    "Use dates like 2026-11-09 for all-day events.",
+                    error=True,
+                )
+                return None
+            if end_day < start_day:
+                self._set_status("End date must be on or after start date.", error=True)
+                return None
+            for time_zone in (start_timezone, end_timezone):
+                if not self._is_known_time_zone(time_zone):
+                    self._set_status(f"Unknown time zone: {time_zone}", error=True)
+                    return None
+            start_zone = ZoneInfo(start_timezone)
+            end_zone = ZoneInfo(end_timezone)
+            start = datetime(
+                start_day.year, start_day.month, start_day.day, tzinfo=start_zone
+            )
+            # The end date in the form is inclusive; the event end is exclusive.
+            end_inclusive = datetime(
+                end_day.year, end_day.month, end_day.day, tzinfo=end_zone
+            )
+            end = end_inclusive + timedelta(days=1)
+            all_day = True
+        else:
+            try:
+                start = datetime.fromisoformat(self.start.text.strip())
+                end = datetime.fromisoformat(self.end.text.strip())
+            except ValueError:
+                self._set_status(
+                    "Use ISO times such as 2026-11-09T14:00+01:00.",
+                    error=True,
+                )
+                return None
+            if start.tzinfo is None or end.tzinfo is None:
+                self._set_status(
+                    "Start and end must include a UTC offset or zone.",
+                    error=True,
+                )
+                return None
+            for time_zone in (start_timezone, end_timezone):
+                if not self._is_known_time_zone(time_zone):
+                    self._set_status(f"Unknown time zone: {time_zone}", error=True)
+                    return None
+            if end <= start:
+                self._set_status("End must be after start.", error=True)
+                return None
+            all_day = False
         return CalendarEvent(
             id=existing.id if existing is not None else uuid4().hex,
             summary=self.summary.text.strip() or "Untitled event",
@@ -430,6 +560,7 @@ class AddEventScreen(Screen):
             recurring_event_id=(
                 existing.recurring_event_id if existing is not None else None
             ),
+            all_day=all_day,
             description=description or None,
             recurrence=existing.recurrence if existing is not None else None,
             extended_properties=(
@@ -450,6 +581,7 @@ class AddEventScreen(Screen):
 
     def _reset_form(self) -> None:
         """Clear the form and prefill a fresh time window and time zone."""
+        self.all_day.active = False
         start, end = default_event_times()
         self.summary.text = ""
         self.description.text = ""
@@ -457,13 +589,14 @@ class AddEventScreen(Screen):
         self.end.text = to_input_value(end)
         self.start_timezone.text = self.time_zone
         self.end_timezone.text = self.time_zone
+        self._apply_all_day_mode(False)
 
     def _set_buttons_enabled(self, enabled: bool) -> None:
         """Enable or disable the form actions."""
         self.save_button.disabled = not enabled
         self.cancel_button.disabled = not enabled
         self.delete_button.disabled = not enabled or self.event is None
-        self.suggest_button.disabled = not enabled
+        self.suggest_button.disabled = not enabled or self.all_day.active
 
     def _set_status(self, text: str, *, error: bool = False) -> None:
         """Show a status or error message below the form."""

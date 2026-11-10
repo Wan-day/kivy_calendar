@@ -462,20 +462,25 @@ def test_get_returns_none_for_a_missing_event(
     assert result.value is None
 
 
-def test_get_rejects_an_all_day_event_with_a_clear_error(
+def test_get_maps_an_all_day_event(
     provider: GoogleCalendarProvider,
     service: Mock,
 ) -> None:
-    """All-day events are unsupported and reported, never crashed on."""
+    """All-day events are mapped to whole-day timed events."""
     service.events.return_value.get.return_value.execute.return_value = (
         _all_day_resource()
     )
 
-    result = provider.get_event("primary", "all-day")
+    event = _loaded_event(provider.get_event("primary", "all-day"))
 
-    assert result.error is not None
-    assert result.error.code is ErrorCode.INVALID_EVENT
-    assert "all-day" in result.error.message
+    assert event.id == "all-day"
+    assert event.summary == "Holiday"
+    assert event.all_day is True
+    assert event.start.date().isoformat() == "2026-11-06"
+    # Google end dates are exclusive, so a one-day event ends on the next day.
+    assert event.end.date().isoformat() == "2026-11-07"
+    assert event.start_timezone == "UTC"
+    assert event.end_timezone == "UTC"
 
 
 def test_get_maps_an_offset_only_utc_event_to_utc(
@@ -536,11 +541,11 @@ def test_list_skips_an_offset_only_non_utc_event(
     assert [event.id for event in result.value] == ["valid1"]
 
 
-def test_list_follows_pagination_and_skips_all_day_events(
+def test_list_follows_pagination_and_maps_all_day_events(
     provider: GoogleCalendarProvider,
     service: Mock,
 ) -> None:
-    """Every page is fetched and all-day entries are omitted."""
+    """Every page is fetched and all-day entries are included."""
     service.calendarList.return_value.list.return_value.execute.return_value = (
         _primary_calendar_list()
     )
@@ -557,7 +562,8 @@ def test_list_follows_pagination_and_skips_all_day_events(
 
     assert result.is_ok
     assert result.value is not None
-    assert [event.id for event in result.value] == ["first", "second"]
+    assert [event.id for event in result.value] == ["all-day", "first", "second"]
+    assert result.value[0].all_day is True
     first_call, second_call = list_request.call_args_list
     assert first_call.kwargs == {
         "calendarId": "primary",
@@ -982,3 +988,89 @@ def test_from_credentials_rejects_a_blank_calendar_id() -> None:
 
     assert result.error is not None
     assert result.error.code is ErrorCode.INVALID_ARGUMENT
+
+
+def test_create_maps_an_all_day_event_to_date_fields(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """All-day events are written with Google date-only fields."""
+    event = Event(
+        id="event1",
+        summary="Holiday",
+        all_day=True,
+        start=datetime(2026, 11, 6, 0, 0, tzinfo=ZoneInfo("UTC")),
+        end=datetime(2026, 11, 7, 0, 0, tzinfo=ZoneInfo("UTC")),
+        start_timezone="UTC",
+        end_timezone="UTC",
+    )
+    insert = service.events.return_value.insert
+    insert.return_value.execute.return_value = _all_day_resource("allday1")
+
+    result = provider.create_event(event)
+
+    assert result.is_ok
+    body = insert.call_args.kwargs["body"]
+    assert body["start"] == {"date": "2026-11-06"}
+    assert body["end"] == {"date": "2026-11-07"}
+    assert "dateTime" not in body["start"]
+    assert "dateTime" not in body["end"]
+
+
+def test_update_maps_an_all_day_event_to_date_fields(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """All-day event edits use date-only fields in the patch payload."""
+    event = Event(
+        id="event1",
+        summary="Holiday",
+        all_day=True,
+        start=datetime(2026, 11, 6, 0, 0, tzinfo=ZoneInfo("UTC")),
+        end=datetime(2026, 11, 8, 0, 0, tzinfo=ZoneInfo("UTC")),
+        start_timezone="UTC",
+        end_timezone="UTC",
+    )
+    patch = service.events.return_value.patch
+    patch.return_value.execute.return_value = {
+        "id": "event1",
+        "summary": "Holiday",
+        "start": {"date": "2026-11-06"},
+        "end": {"date": "2026-11-08"},
+    }
+
+    result = provider.update_event(event)
+
+    assert result.is_ok
+    body = patch.call_args.kwargs["body"]
+    assert body["start"] == {"date": "2026-11-06"}
+    assert body["end"] == {"date": "2026-11-08"}
+
+
+def test_list_maps_multi_day_all_day_event(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A multi-day all-day event keeps its full exclusive span."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _primary_calendar_list()
+    )
+    service.events.return_value.list.return_value.execute.return_value = {
+        "items": [
+            {
+                "id": "trip",
+                "summary": "Trip",
+                "start": {"date": "2026-11-06"},
+                "end": {"date": "2026-11-10"},
+            }
+        ]
+    }
+
+    result = provider.list_events()
+
+    assert result.is_ok
+    assert result.value is not None
+    event = result.value[0]
+    assert event.all_day is True
+    assert event.start.date().isoformat() == "2026-11-06"
+    assert event.end.date().isoformat() == "2026-11-10"

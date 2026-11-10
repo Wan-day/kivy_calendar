@@ -17,10 +17,10 @@ characters from the base32hex alphabet ``[0-9a-v]``.  Create and update reject
 anything else with ``INVALID_ARGUMENT`` before calling Google;
 :func:`generate_event_id` returns a UUID hex string that is always valid.
 
-All-day events are not supported yet.  The domain model always carries timed
-values, so :meth:`GoogleCalendarProvider.list_events` skips all-day entries and
-:meth:`GoogleCalendarProvider.get_event` reports a clear ``INVALID_EVENT``
-error instead of crashing.
+All-day events use Google's ``date`` fields instead of ``dateTime``.  The
+domain model keeps them as midnight-to-midnight timed values flagged with
+``all_day``, so the rest of the app can treat them like any other event while
+the provider translates between the two shapes.
 
 Timed events normally repeat their IANA zone in Google's ``timeZone`` field.
 Some events created by other clients instead carry only an offset inside the
@@ -61,8 +61,9 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
@@ -104,17 +105,24 @@ def generate_event_id() -> str:
 class GoogleCalendarProvider:
     """A :class:`~google_calendar.provider.CalendarProvider` backed by Google."""
 
-    def __init__(self, service: Any, calendar_id: str = DEFAULT_CALENDAR_ID) -> None:
+    def __init__(
+        self,
+        service: Any,
+        calendar_id: str = DEFAULT_CALENDAR_ID,
+        time_zone: str = "UTC",
+    ) -> None:
         if not calendar_id.strip():
             raise ValueError("calendar_id must not be blank")
         self._service = service
         self._calendar_id = calendar_id
+        self._time_zone = time_zone
 
     @classmethod
     def from_credentials(
         cls,
         credentials: Credentials,
         calendar_id: str = DEFAULT_CALENDAR_ID,
+        time_zone: str = "UTC",
     ) -> Result[GoogleCalendarProvider]:
         """Build a provider from OAuth credentials.
 
@@ -138,7 +146,7 @@ class GoogleCalendarProvider:
                 ErrorCode.UPSTREAM_ERROR,
                 f"could not build the Google Calendar service: {exc}",
             )
-        return Result.ok(cls(service, calendar_id))
+        return Result.ok(cls(service, calendar_id, time_zone=time_zone))
 
     def create_event(self, event: Event) -> Result[Event]:
         """Insert ``event`` with its client-generated id, or as a series override.
@@ -228,13 +236,13 @@ class GoogleCalendarProvider:
                 return Result.ok(None)
             return Result.fail(response.error.code, response.error.message)
 
-        mapped = _event_from_resource(response.value, target)
+        mapped = _event_from_resource(response.value, target, self._time_zone)
         if mapped.error is not None:
             return Result.fail(mapped.error.code, mapped.error.message)
         return Result.ok(mapped.value)
 
     def list_events(self) -> Result[list[Event]]:
-        """Return every timed event from every readable calendar.
+        """Return every event from every readable calendar.
 
         Google can expose the same event through more than one calendar, so
         duplicate ids are collapsed to the first calendar that lists them.
@@ -307,9 +315,7 @@ class GoogleCalendarProvider:
             if items.error is not None:
                 return Result.fail(items.error.code, items.error.message)
             for item in items.value or []:
-                if _is_all_day_resource(item):
-                    continue
-                mapped = _event_from_resource(item, calendar_id)
+                mapped = _event_from_resource(item, calendar_id, self._time_zone)
                 if mapped.error is not None:
                     # One unmappable entry (an all-day event or an offset-only
                     # event without an IANA zone) must not abort the whole sync.
@@ -344,7 +350,7 @@ class GoogleCalendarProvider:
         response = self._execute(request)
         if response.error is not None:
             return Result.fail(response.error.code, response.error.message)
-        return _event_from_resource(response.value, calendar_id)
+        return _event_from_resource(response.value, calendar_id, self._time_zone)
 
     def _execute(self, request: Callable[[], Any]) -> Result[Any]:
         """Build and execute one Google request, mapping every failure."""
@@ -371,16 +377,21 @@ def _event_to_payload(event: Event) -> dict[str, Any]:
     """Map the domain event onto a Google Calendar ``events`` payload."""
     payload: dict[str, Any] = {
         "summary": event.summary,
-        "start": {
-            "dateTime": event.start.isoformat(),
-            "timeZone": event.start_timezone,
-        },
-        "end": {
-            "dateTime": event.end.isoformat(),
-            "timeZone": event.end_timezone,
-        },
         "extendedProperties": {"private": dict(event.extended_properties)},
     }
+    if event.all_day:
+        # All-day events use date-only values; the end date is exclusive.
+        payload["start"] = {"date": _event_date(event.start)}
+        payload["end"] = {"date": _event_date(event.end)}
+    else:
+        payload["start"] = {
+            "dateTime": event.start.isoformat(),
+            "timeZone": event.start_timezone,
+        }
+        payload["end"] = {
+            "dateTime": event.end.isoformat(),
+            "timeZone": event.end_timezone,
+        }
     if event.recurring_event_id:
         # An occurrence edit targets one slot of a recurring series.
         payload["recurringEventId"] = event.recurring_event_id
@@ -393,7 +404,113 @@ def _event_to_payload(event: Event) -> dict[str, Any]:
     return payload
 
 
-def _event_from_resource(raw: object, calendar_id: str) -> Result[Event]:
+def _event_date(moment: datetime) -> str:
+    """Return the local calendar date for an all-day bound."""
+    return moment.date().isoformat()
+
+
+def _all_day_event(
+    raw: dict[str, Any],
+    calendar_id: str,
+    time_zone: str,
+) -> Result[Event]:
+    """Map a Google all-day resource onto the domain model.
+
+    All-day events cover whole calendar days, so the domain keeps them as
+    midnight-to-midnight datetimes in the calendar's time zone and flags them
+    with ``all_day``.  The Google end date is exclusive, which becomes the
+    event duration; a missing or degenerate end falls back to a single day.
+    """
+    event_id = raw.get("id")
+    start_value = raw.get("start")
+    end_value = raw.get("end")
+    start_text = start_value.get("date") if isinstance(start_value, dict) else None
+    end_text = end_value.get("date") if isinstance(end_value, dict) else None
+    if (
+        not isinstance(event_id, str)
+        or not event_id.strip()
+        or not isinstance(start_text, str)
+        or not start_text.strip()
+        or not isinstance(end_text, str)
+        or not end_text.strip()
+    ):
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            "Google Calendar returned an event with invalid all-day bounds",
+        )
+    try:
+        start_date = date.fromisoformat(start_text.strip())
+        end_date = date.fromisoformat(end_text.strip())
+    except ValueError:
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"Google Calendar returned an event {event_id!r} with an "
+            "invalid all-day date",
+        )
+    duration = end_date - start_date
+    if duration <= timedelta(0):
+        duration = timedelta(days=1)
+    try:
+        zone = ZoneInfo(time_zone)
+    except Exception:
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"Google Calendar event {event_id!r} has an unknown time zone: "
+            f"{time_zone!r}",
+        )
+    start = datetime(start_date.year, start_date.month, start_date.day, tzinfo=zone)
+    end = start + duration
+    recurring_event_id = raw.get("recurringEventId")
+    if recurring_event_id is not None and not isinstance(recurring_event_id, str):
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"event {event_id!r} has an invalid recurring event id",
+        )
+    extended_properties: dict[str, str] = {}
+    extended = raw.get("extendedProperties")
+    if isinstance(extended, dict):
+        private = extended.get("private", {})
+        if isinstance(private, dict):
+            extended_properties = {
+                str(key): str(value) for key, value in private.items()
+            }
+    try:
+        return Result.ok(
+            Event(
+                id=event_id,
+                calendar_id=calendar_id,
+                recurring_event_id=recurring_event_id,
+                all_day=True,
+                summary=str(raw.get("summary") or ""),
+                description=(
+                    str(raw["description"])
+                    if isinstance(raw.get("description"), str)
+                    else None
+                ),
+                start=start,
+                end=end,
+                start_timezone=time_zone,
+                end_timezone=time_zone,
+                recurrence=(
+                    list(raw["recurrence"])
+                    if isinstance(raw.get("recurrence"), list)
+                    else None
+                ),
+                extended_properties=extended_properties,
+            )
+        )
+    except ValueError as exc:
+        return Result.fail(
+            ErrorCode.INVALID_EVENT,
+            f"Google Calendar returned an invalid event {event_id!r}: {exc}",
+        )
+
+
+def _event_from_resource(
+    raw: object,
+    calendar_id: str,
+    time_zone: str = "UTC",
+) -> Result[Event]:
     """Map a Google event resource back onto the domain model."""
     if not isinstance(raw, dict):
         return Result.fail(
@@ -401,10 +518,7 @@ def _event_from_resource(raw: object, calendar_id: str) -> Result[Event]:
             "Google Calendar returned an event that is not an object",
         )
     if _is_all_day_resource(raw):
-        return Result.fail(
-            ErrorCode.INVALID_EVENT,
-            "all-day events are not supported by this backend yet",
-        )
+        return _all_day_event(raw, calendar_id, time_zone)
 
     event_id = raw.get("id")
     if not isinstance(event_id, str) or not event_id.strip():

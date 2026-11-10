@@ -22,9 +22,18 @@ def default_event_times(now: datetime | None = None) -> tuple[datetime, datetime
 
 
 def format_event_when(event: CalendarEvent) -> str:
-    """Return a short human-readable date and time span for an event."""
+    """Return a short human-readable span for an event."""
     start = event.start
     end = event.end
+    if event.all_day:
+        # All-day events cover whole calendar days; the end is exclusive, so
+        # the last covered day is the day before the end.
+        end_day = end.date() - timedelta(days=1)
+        if end_day < start.date():
+            end_day = start.date()
+        if start.date() == end_day:
+            return f"{start:%a %d %b %Y}"
+        return f"{start:%d %b %Y} \u2013 {end_day:%d %b %Y}"
     if start.date() == end.date():
         span = f"{start:%H:%M}\u2013{end:%H:%M}"
     else:

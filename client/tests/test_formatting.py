@@ -15,7 +15,7 @@ from kivy_calendar.formatting import (
 BERLIN = ZoneInfo("Europe/Berlin")
 
 
-def _event(start: datetime, end: datetime) -> CalendarEvent:
+def _event(start: datetime, end: datetime, *, all_day: bool = False) -> CalendarEvent:
     return CalendarEvent(
         id="event-1",
         summary="Team standup",
@@ -23,6 +23,7 @@ def _event(start: datetime, end: datetime) -> CalendarEvent:
         end=end,
         start_timezone="Europe/Berlin",
         end_timezone="Europe/Berlin",
+        all_day=all_day,
     )
 
 
@@ -71,3 +72,25 @@ def test_to_input_value_keeps_minute_precision() -> None:
     value = datetime(2026, 11, 9, 14, 20, 30, tzinfo=BERLIN)
 
     assert to_input_value(value) == "2026-11-09T14:20+01:00"
+
+
+def test_format_event_when_shows_a_single_all_day_date() -> None:
+    """A one-day all-day event is shown as just its date."""
+    event = _event(
+        datetime(2026, 11, 6, 0, 0, tzinfo=BERLIN),
+        datetime(2026, 11, 7, 0, 0, tzinfo=BERLIN),
+        all_day=True,
+    )
+
+    assert format_event_when(event) == "Fri 06 Nov 2026"
+
+
+def test_format_event_when_shows_a_multi_day_all_day_span() -> None:
+    """A multi-day all-day event shows its inclusive day range."""
+    event = _event(
+        datetime(2026, 11, 6, 0, 0, tzinfo=BERLIN),
+        datetime(2026, 11, 9, 0, 0, tzinfo=BERLIN),
+        all_day=True,
+    )
+
+    assert format_event_when(event) == "06 Nov 2026 – 08 Nov 2026"

@@ -102,6 +102,8 @@ def update_event(
     updated = Event(
         id=event_id,
         calendar_id=event.calendar_id,
+        recurring_event_id=event.recurring_event_id,
+        all_day=event.all_day,
         start=event.start,
         end=event.end,
         start_timezone=event.start_timezone,
