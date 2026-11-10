@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY NOT NULL,
     calendar_id TEXT NOT NULL DEFAULT '',
     recurring_event_id TEXT NOT NULL DEFAULT '',
+    all_day TEXT NOT NULL DEFAULT '0',
     summary TEXT NOT NULL,
     start_utc TEXT NOT NULL,
     start_timezone TEXT NOT NULL,
@@ -41,6 +42,7 @@ _COLUMNS = (
     "id",
     "calendar_id",
     "recurring_event_id",
+    "all_day",
     "summary",
     "start_utc",
     "start_timezone",
@@ -58,6 +60,7 @@ _UPDATE = """
 UPDATE events
 SET calendar_id = ?,
     recurring_event_id = ?,
+    all_day = ?,
     summary = ?,
     start_utc = ?,
     start_timezone = ?,
@@ -219,6 +222,10 @@ def _migrate(connection: sqlite3.Connection) -> None:
             "ALTER TABLE events ADD COLUMN recurring_event_id "
             "TEXT NOT NULL DEFAULT ''"
         )
+    if "all_day" not in columns:
+        connection.execute(
+            "ALTER TABLE events ADD COLUMN all_day TEXT NOT NULL DEFAULT '0'"
+        )
 
 
 def _event_values(event: Event) -> tuple[object, ...]:
@@ -227,6 +234,7 @@ def _event_values(event: Event) -> tuple[object, ...]:
         event.id,
         event.calendar_id,
         event.recurring_event_id or "",
+        int(event.all_day),
         event.summary,
         event.start.astimezone(UTC).isoformat(),
         event.start_timezone,
@@ -251,10 +259,14 @@ def _row_to_event(row: sqlite3.Row) -> Event:
     recurring_event_id = (
         row["recurring_event_id"] if "recurring_event_id" in row.keys() else ""
     )
+    all_day = (
+        row["all_day"] if "all_day" in row.keys() else "0"
+    )
     return Event(
         id=row["id"],
         calendar_id=calendar_id,
         recurring_event_id=recurring_event_id or None,
+        all_day=str(all_day).strip().lower() in {"1", "true", "yes"},
         summary=row["summary"],
         start=start,
         end=end,

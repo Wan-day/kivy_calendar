@@ -516,3 +516,46 @@ def test_main_screen_reports_an_invalid_date_filter() -> None:
 
     assert main_screen.status_label.text == "Use dates like YYYY-MM-DD."
     assert len(main_screen.event_list.children) == 1
+
+
+def test_add_event_builds_an_all_day_event() -> None:
+    """An all-day form builds a midnight-to-midnight event."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.all_day.active = True
+    add_event_screen.summary.text = "Holiday"
+    add_event_screen.start.text = "2026-11-09"
+    add_event_screen.end.text = "2026-11-09"
+    add_event_screen.start_timezone.text = "Europe/Berlin"
+    add_event_screen.end_timezone.text = "Europe/Berlin"
+
+    event = add_event_screen._build_event()
+
+    assert event is not None
+    assert event.all_day is True
+    assert event.start.date().isoformat() == "2026-11-09"
+    assert event.end.date().isoformat() == "2026-11-10"
+
+
+def test_edit_form_keeps_all_day_flag() -> None:
+    """Editing an all-day event preserves its all-day flag."""
+    from kivy_calendar.api import CalendarEvent
+
+    _, _, add_event_screen = _make_screens(FakeClient())
+    original = CalendarEvent(
+        id="event-all-day",
+        summary="Holiday",
+        start=datetime(2026, 11, 9, 0, 0, tzinfo=BERLIN),
+        end=datetime(2026, 11, 10, 0, 0, tzinfo=BERLIN),
+        start_timezone="Europe/Berlin",
+        end_timezone="Europe/Berlin",
+        all_day=True,
+    )
+    add_event_screen.open_for(original)
+    add_event_screen.summary.text = "Holiday (moved)"
+
+    event = add_event_screen._build_event()
+
+    assert event is not None
+    assert event.id == original.id
+    assert event.all_day is True
+    assert event.summary == "Holiday (moved)"

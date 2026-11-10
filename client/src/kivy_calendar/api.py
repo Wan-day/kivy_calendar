@@ -45,6 +45,7 @@ class CalendarEvent:
     end_timezone: str
     calendar_id: str = ""
     recurring_event_id: str | None = None
+    all_day: bool = False
     description: str | None = None
     recurrence: list[str] | None = None
     extended_properties: dict[str, str] | None = None
@@ -253,6 +254,7 @@ class BackendClient:
                 if payload.get("recurring_event_id") is not None
                 else None
             ),
+            all_day=bool(payload.get("all_day") or False),
             description=(
                 str(payload["description"])
                 if payload.get("description") is not None
@@ -315,6 +317,7 @@ class BackendClient:
             "end_timezone": event.end_timezone,
             "calendar_id": event.calendar_id,
             "recurring_event_id": event.recurring_event_id,
+            "all_day": event.all_day,
             "description": event.description,
             "recurrence": event.recurrence,
             "extended_properties": event.extended_properties or {},

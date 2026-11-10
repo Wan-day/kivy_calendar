@@ -42,6 +42,7 @@ def _build_default_provider(settings: Settings) -> CalendarProvider:
         provider_result = GoogleCalendarProvider.from_credentials(
             credentials_result.value,
             settings.google_calendar_id,
+            time_zone=settings.google_calendar_time_zone,
         )
         if provider_result.is_ok and provider_result.value is not None:
             return provider_result.value

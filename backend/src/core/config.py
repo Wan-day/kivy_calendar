@@ -15,6 +15,7 @@ class Settings:
     google_client_secret: str = ""
     google_refresh_token: str = ""
     google_calendar_id: str = "primary"
+    google_calendar_time_zone: str = "UTC"
     backend_api_token: str = ""
 
     @classmethod
@@ -30,6 +31,7 @@ class Settings:
             google_client_secret=value("GOOGLE_CLIENT_SECRET"),
             google_refresh_token=value("GOOGLE_REFRESH_TOKEN"),
             google_calendar_id=value("GOOGLE_CALENDAR_ID") or "primary",
+            google_calendar_time_zone=value("GOOGLE_CALENDAR_TIME_ZONE") or "UTC",
             backend_api_token=value("BACKEND_API_TOKEN"),
         )
 

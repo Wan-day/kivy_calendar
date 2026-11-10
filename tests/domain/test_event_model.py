@@ -20,6 +20,7 @@ def _event(
     end_timezone: str = "Europe/Berlin",
     calendar_id: str = "",
     recurring_event_id: str | None = None,
+    all_day: bool = False,
     description: str | None = None,
     recurrence: list[str] | None = None,
     extended_properties: dict[str, str] | None = None,
@@ -28,6 +29,7 @@ def _event(
         id=id,
         calendar_id=calendar_id,
         recurring_event_id=recurring_event_id,
+        all_day=all_day,
         summary=summary,
         start=start or datetime(2026, 11, 6, 9, 0, tzinfo=BERLIN),
         end=end or datetime(2026, 11, 6, 9, 30, tzinfo=BERLIN),
@@ -57,6 +59,15 @@ def test_event_defaults_the_recurring_event_id_to_none() -> None:
     series = _event(recurring_event_id="series-1")
 
     assert series.recurring_event_id == "series-1"
+
+
+def test_event_defaults_all_day_to_false() -> None:
+    """Timed events are not all-day unless explicitly marked."""
+    assert _event().all_day is False
+
+    all_day = _event(all_day=True)
+
+    assert all_day.all_day is True
 
 
 def test_naive_start_is_rejected() -> None:
