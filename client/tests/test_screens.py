@@ -518,6 +518,37 @@ def test_main_screen_reports_an_invalid_date_filter() -> None:
     assert len(main_screen.event_list.children) == 1
 
 
+def test_event_form_uses_time_zone_dropdowns() -> None:
+    """Time zones are chosen from a 24-entry UTC offset dropdown."""
+    from kivy.uix.spinner import Spinner
+
+    _, _, add_event_screen = _make_screens(FakeClient())
+
+    assert isinstance(add_event_screen.start_timezone, Spinner)
+    assert isinstance(add_event_screen.end_timezone, Spinner)
+    assert len(add_event_screen.start_timezone.values) == 24
+    assert "UTC+0" in add_event_screen.start_timezone.values
+    assert "UTC+1" in add_event_screen.start_timezone.values
+    assert "UTC-1" in add_event_screen.end_timezone.values
+    assert add_event_screen.start_timezone.text == "Europe/Berlin"
+
+
+def test_add_event_maps_a_utc_label_to_a_fixed_offset_zone() -> None:
+    """Picking UTC+1 saves the matching IANA fixed-offset zone."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.summary.text = "Dentist"
+    add_event_screen.start.text = "2026-11-09T15:00+01:00"
+    add_event_screen.end.text = "2026-11-09T16:30+01:00"
+    add_event_screen.start_timezone.text = "UTC+1"
+    add_event_screen.end_timezone.text = "UTC+1"
+
+    event = add_event_screen._build_event()
+
+    assert event is not None
+    assert event.start_timezone == "Etc/GMT-1"
+    assert event.end_timezone == "Etc/GMT-1"
+
+
 def test_add_event_builds_an_all_day_event() -> None:
     """An all-day form builds a midnight-to-midnight event."""
     _, _, add_event_screen = _make_screens(FakeClient())

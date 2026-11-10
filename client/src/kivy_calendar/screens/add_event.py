@@ -16,12 +16,16 @@ from kivy.uix.checkbox import CheckBox
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import Screen
 from kivy.uix.scrollview import ScrollView
+from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 
 from kivy_calendar.api import BackendClient, BackendError, CalendarEvent, FreeSlot
 from kivy_calendar.formatting import (
     DEFAULT_TIME_ZONE,
+    UTC_OFFSET_LABELS,
     default_event_times,
+    time_zone_from_label,
+    time_zone_label,
     to_input_value,
 )
 from kivy_calendar.screens.ui import wrapped_label
@@ -89,6 +93,16 @@ def _input(
     )
 
 
+def _time_zone_spinner(default: str) -> Spinner:
+    """Create a dropdown with one fixed UTC offset per hour."""
+    return Spinner(
+        text=time_zone_label(default),
+        values=list(UTC_OFFSET_LABELS),
+        size_hint_y=None,
+        height=44,
+    )
+
+
 class AddEventScreen(Screen):
     """Create a new event or edit an existing one in the backend."""
 
@@ -110,8 +124,8 @@ class AddEventScreen(Screen):
         self.summary = _input("Team standup")
         self.start = _input("")
         self.end = _input("")
-        self.start_timezone = _input("")
-        self.end_timezone = _input("")
+        self.start_timezone = _time_zone_spinner(self.time_zone)
+        self.end_timezone = _time_zone_spinner(self.time_zone)
         self.description = _input("Optional notes", height=88, multiline=True)
         self.all_day = CheckBox(size_hint=(None, None), size=(44, 44))
 
@@ -150,8 +164,8 @@ class AddEventScreen(Screen):
         )
         form.add_widget(self._start_field)
         form.add_widget(self._end_field)
-        form.add_widget(_field("Start time zone (IANA name)", self.start_timezone))
-        form.add_widget(_field("End time zone (IANA name)", self.end_timezone))
+        form.add_widget(_field("Start time zone", self.start_timezone))
+        form.add_widget(_field("End time zone", self.end_timezone))
         form.add_widget(_field("Description", self.description))
 
         self.all_day.bind(active=self._on_all_day_changed)
@@ -224,8 +238,8 @@ class AddEventScreen(Screen):
             else:
                 self.start.text = to_input_value(event.start)
                 self.end.text = to_input_value(event.end)
-            self.start_timezone.text = event.start_timezone
-            self.end_timezone.text = event.end_timezone
+            self.start_timezone.text = time_zone_label(event.start_timezone)
+            self.end_timezone.text = time_zone_label(event.end_timezone)
             self.description.text = event.description or ""
             self._apply_all_day_mode(event.all_day)
         self._set_buttons_enabled(True)
@@ -292,7 +306,7 @@ class AddEventScreen(Screen):
         if client is None:
             self._set_status("Backend client is not configured.", error=True)
             return
-        time_zone = self.start_timezone.text.strip() or self.time_zone
+        time_zone = self._resolved_time_zone(self.start_timezone.text)
         if not self._is_known_time_zone(time_zone):
             self._set_status(f"Unknown time zone: {time_zone}", error=True)
             return
@@ -495,8 +509,8 @@ class AddEventScreen(Screen):
         """Turn the form values into an event, reporting invalid input."""
         existing = self.event
         description = self.description.text.strip()
-        start_timezone = self.start_timezone.text.strip() or self.time_zone
-        end_timezone = self.end_timezone.text.strip() or self.time_zone
+        start_timezone = self._resolved_time_zone(self.start_timezone.text)
+        end_timezone = self._resolved_time_zone(self.end_timezone.text)
         if self.all_day.active:
             try:
                 start_day = date.fromisoformat(self.start.text.strip())
@@ -570,6 +584,11 @@ class AddEventScreen(Screen):
             ),
         )
 
+    def _resolved_time_zone(self, raw: str) -> str:
+        """Return the IANA zone for a dropdown label or a zone name."""
+        text = raw.strip()
+        return time_zone_from_label(text) or text or self.time_zone
+
     @staticmethod
     def _is_known_time_zone(name: str) -> bool:
         """Return whether ``name`` is an IANA time zone."""
@@ -587,8 +606,8 @@ class AddEventScreen(Screen):
         self.description.text = ""
         self.start.text = to_input_value(start)
         self.end.text = to_input_value(end)
-        self.start_timezone.text = self.time_zone
-        self.end_timezone.text = self.time_zone
+        self.start_timezone.text = time_zone_label(self.time_zone)
+        self.end_timezone.text = time_zone_label(self.time_zone)
         self._apply_all_day_mode(False)
 
     def _set_buttons_enabled(self, enabled: bool) -> None:
