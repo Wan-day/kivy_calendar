@@ -11,8 +11,48 @@ DEFAULT_TIME_ZONE = "Europe/Berlin"
 # The event form offers one fixed UTC offset per hour.  UTC-11 through UTC+12
 # covers every inhabited offset in 24 entries.
 UTC_OFFSET_HOURS: tuple[int, ...] = tuple(range(-11, 13))
+
+# Two or three representative cities per offset, so a dropdown entry is easy to
+# recognize without knowing the numeric offset by heart.
+UTC_OFFSET_CITIES: dict[int, tuple[str, ...]] = {
+    -11: ("Pago Pago", "Alofi", "Midway"),
+    -10: ("Honolulu", "Papeete", "Rarotonga"),
+    -9: ("Anchorage", "Juneau", "Nome"),
+    -8: ("Los Angeles", "Vancouver", "Tijuana"),
+    -7: ("Denver", "Calgary", "Phoenix"),
+    -6: ("Chicago", "Mexico City", "Winnipeg"),
+    -5: ("New York", "Toronto", "Bogotá"),
+    -4: ("Santiago", "Halifax", "Caracas"),
+    -3: ("São Paulo", "Buenos Aires", "Rio de Janeiro"),
+    -2: ("Fernando de Noronha", "South Georgia"),
+    -1: ("Azores", "Praia", "Ittoqqortoormiit"),
+    0: ("London", "Dublin", "Lisbon"),
+    1: ("Berlin", "Paris", "Rome"),
+    2: ("Athens", "Helsinki", "Johannesburg"),
+    3: ("Moscow", "Istanbul", "Nairobi"),
+    4: ("Dubai", "Baku", "Muscat"),
+    5: ("Karachi", "Tashkent", "Yekaterinburg"),
+    6: ("Dhaka", "Almaty", "Omsk"),
+    7: ("Bangkok", "Jakarta", "Hanoi"),
+    8: ("Beijing", "Singapore", "Perth"),
+    9: ("Tokyo", "Seoul", "Yakutsk"),
+    10: ("Brisbane", "Vladivostok", "Port Moresby"),
+    11: ("Nouméa", "Honiara", "Magadan"),
+    12: ("Suva", "Majuro", "Kamchatka"),
+}
+
+
+def utc_offset_label(hours: int) -> str:
+    """Return the dropdown label for a whole-hour UTC offset."""
+    label = f"UTC{hours:+d}"
+    cities = UTC_OFFSET_CITIES.get(hours)
+    if not cities:
+        return label
+    return f"{label} ({', '.join(cities)})"
+
+
 UTC_OFFSET_LABELS: tuple[str, ...] = tuple(
-    f"UTC{hours:+d}" for hours in UTC_OFFSET_HOURS
+    utc_offset_label(hours) for hours in UTC_OFFSET_HOURS
 )
 
 
@@ -47,15 +87,17 @@ def offset_hours_for_zone(zone: str) -> int | None:
 def time_zone_label(zone: str) -> str:
     """Return the dropdown label for ``zone``, keeping unknown zones as-is."""
     hours = offset_hours_for_zone(zone)
-    return f"UTC{hours:+d}" if hours is not None else zone
+    return utc_offset_label(hours) if hours is not None else zone
 
 
 def time_zone_from_label(label: str) -> str | None:
     """Return the IANA zone for a ``UTC+N`` label, or ``None`` when unknown."""
     text = label.strip()
-    if not text.upper().startswith("UTC"):
+    # Labels may carry example cities in parentheses: "UTC+1 (Berlin, ...)".
+    prefix = text.split("(", 1)[0].strip()
+    if not prefix.upper().startswith("UTC"):
         return None
-    suffix = text[3:]
+    suffix = prefix[3:].strip()
     if not suffix:
         return "UTC"
     if suffix[0] not in "+-" or not suffix[1:].isdigit():

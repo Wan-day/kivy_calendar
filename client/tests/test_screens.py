@@ -523,24 +523,31 @@ def test_event_form_uses_time_zone_dropdowns() -> None:
     from kivy.uix.spinner import Spinner
 
     _, _, add_event_screen = _make_screens(FakeClient())
+    values = add_event_screen.start_timezone.values
+    end_values = add_event_screen.end_timezone.values
 
     assert isinstance(add_event_screen.start_timezone, Spinner)
     assert isinstance(add_event_screen.end_timezone, Spinner)
-    assert len(add_event_screen.start_timezone.values) == 24
-    assert "UTC+0" in add_event_screen.start_timezone.values
-    assert "UTC+1" in add_event_screen.start_timezone.values
-    assert "UTC-1" in add_event_screen.end_timezone.values
+    assert len(values) == 24
+    assert any(value.startswith("UTC+0 ") for value in values)
+    assert any(value.startswith("UTC-1 ") for value in end_values)
+    assert "UTC+1 (Berlin, Paris, Rome)" in values
     assert add_event_screen.start_timezone.text == "Europe/Berlin"
 
 
 def test_add_event_maps_a_utc_label_to_a_fixed_offset_zone() -> None:
     """Picking UTC+1 saves the matching IANA fixed-offset zone."""
     _, _, add_event_screen = _make_screens(FakeClient())
+    utc_plus_one = next(
+        value
+        for value in add_event_screen.start_timezone.values
+        if value.startswith("UTC+1 ")
+    )
     add_event_screen.summary.text = "Dentist"
     add_event_screen.start.text = "2026-11-09T15:00+01:00"
     add_event_screen.end.text = "2026-11-09T16:30+01:00"
-    add_event_screen.start_timezone.text = "UTC+1"
-    add_event_screen.end_timezone.text = "UTC+1"
+    add_event_screen.start_timezone.text = utc_plus_one
+    add_event_screen.end_timezone.text = utc_plus_one
 
     event = add_event_screen._build_event()
 
