@@ -7,7 +7,7 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from kivy.clock import Clock
 from kivy.uix.boxlayout import BoxLayout
@@ -16,6 +16,7 @@ from kivy.uix.checkbox import CheckBox
 from kivy.uix.popup import Popup
 from kivy.uix.screenmanager import Screen
 from kivy.uix.scrollview import ScrollView
+from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 
 from kivy_calendar.api import BackendClient, BackendError, CalendarEvent, FreeSlot
@@ -89,6 +90,22 @@ def _input(
     )
 
 
+def _time_zone_spinner(default: str) -> Spinner:
+    """Create a dropdown of the available IANA time zones."""
+    zones = sorted(available_timezones())
+    if "UTC" in zones:
+        zones.remove("UTC")
+        zones.insert(0, "UTC")
+    if default not in zones:
+        zones.insert(0, default)
+    return Spinner(
+        text=default,
+        values=zones,
+        size_hint_y=None,
+        height=44,
+    )
+
+
 class AddEventScreen(Screen):
     """Create a new event or edit an existing one in the backend."""
 
@@ -110,8 +127,8 @@ class AddEventScreen(Screen):
         self.summary = _input("Team standup")
         self.start = _input("")
         self.end = _input("")
-        self.start_timezone = _input("")
-        self.end_timezone = _input("")
+        self.start_timezone = _time_zone_spinner(self.time_zone)
+        self.end_timezone = _time_zone_spinner(self.time_zone)
         self.description = _input("Optional notes", height=88, multiline=True)
         self.all_day = CheckBox(size_hint=(None, None), size=(44, 44))
 
@@ -150,8 +167,8 @@ class AddEventScreen(Screen):
         )
         form.add_widget(self._start_field)
         form.add_widget(self._end_field)
-        form.add_widget(_field("Start time zone (IANA name)", self.start_timezone))
-        form.add_widget(_field("End time zone (IANA name)", self.end_timezone))
+        form.add_widget(_field("Start time zone", self.start_timezone))
+        form.add_widget(_field("End time zone", self.end_timezone))
         form.add_widget(_field("Description", self.description))
 
         self.all_day.bind(active=self._on_all_day_changed)

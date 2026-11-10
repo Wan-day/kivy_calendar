@@ -518,6 +518,19 @@ def test_main_screen_reports_an_invalid_date_filter() -> None:
     assert len(main_screen.event_list.children) == 1
 
 
+def test_event_form_uses_time_zone_dropdowns() -> None:
+    """Time zones are chosen from a dropdown instead of free text."""
+    from kivy.uix.spinner import Spinner
+
+    _, _, add_event_screen = _make_screens(FakeClient())
+
+    assert isinstance(add_event_screen.start_timezone, Spinner)
+    assert isinstance(add_event_screen.end_timezone, Spinner)
+    assert add_event_screen.start_timezone.text == "Europe/Berlin"
+    assert "UTC" in add_event_screen.start_timezone.values
+    assert "Europe/Berlin" in add_event_screen.end_timezone.values
+
+
 def test_add_event_builds_an_all_day_event() -> None:
     """An all-day form builds a midnight-to-midnight event."""
     _, _, add_event_screen = _make_screens(FakeClient())
