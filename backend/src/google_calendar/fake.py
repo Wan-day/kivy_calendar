@@ -14,6 +14,7 @@ from collections import deque
 from collections.abc import Iterable
 
 from core.errors import Error, ErrorCode, Result
+from domain.calendar import CalendarInfo
 from domain.event import Event
 from google_calendar.provider import ProviderOperation
 
@@ -21,10 +22,20 @@ from google_calendar.provider import ProviderOperation
 class FakeCalendarProvider:
     """An in-memory :class:`~google_calendar.provider.CalendarProvider` fake."""
 
-    def __init__(self, events: Iterable[Event] = ()) -> None:
+    def __init__(
+        self,
+        events: Iterable[Event] = (),
+        *,
+        calendars: Iterable[CalendarInfo] | None = None,
+    ) -> None:
         self._events: dict[str, Event] = {
             event.id: event.model_copy(deep=True) for event in events
         }
+        self._calendars: list[CalendarInfo] = (
+            list(calendars)
+            if calendars is not None
+            else [CalendarInfo(id="primary", summary="Primary", primary=True)]
+        )
         self._failures: dict[ProviderOperation, deque[Error]] = {
             operation: deque() for operation in ProviderOperation
         }
@@ -88,6 +99,40 @@ class FakeCalendarProvider:
             )
         self._events[event.id] = event.model_copy(deep=True)
         return Result.ok(event.model_copy(deep=True))
+
+    def move_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+        destination_calendar_id: str,
+    ) -> Result[Event]:
+        """Move a stored event to another calendar.
+
+        Events are keyed by id only, so ``calendar_id`` is accepted but ignored
+        by the fake; only the stored calendar id changes.
+        """
+        self.calls.append((ProviderOperation.MOVE, event_id))
+        failure = self._take_failure(ProviderOperation.MOVE)
+        if failure is not None:
+            return Result.fail(failure.code, failure.message)
+        event = self._events.get(event_id)
+        if event is None:
+            return Result.fail(
+                ErrorCode.NOT_FOUND,
+                f"event {event_id!r} does not exist in the fake calendar",
+            )
+        destination = destination_calendar_id or "primary"
+        moved = event.model_copy(update={"calendar_id": destination}, deep=True)
+        self._events[event_id] = moved
+        return Result.ok(moved.model_copy(deep=True))
+
+    def list_calendars(self) -> Result[list[CalendarInfo]]:
+        """Return the fake's configured calendars."""
+        self.calls.append((ProviderOperation.LIST_CALENDARS, None))
+        failure = self._take_failure(ProviderOperation.LIST_CALENDARS)
+        if failure is not None:
+            return Result.fail(failure.code, failure.message)
+        return Result.ok([calendar.model_copy() for calendar in self._calendars])
 
     def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:
         """Remove a stored event, failing when its id is unknown.

@@ -541,6 +541,157 @@ def test_list_skips_an_offset_only_non_utc_event(
     assert [event.id for event in result.value] == ["valid1"]
 
 
+def test_list_calendars_maps_summaries_and_marks_the_primary(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Readable calendars are listed with their names, primary first."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item(
+                "work@example.com",
+                summary="Work",
+                accessRole="writer",
+            ),
+            _calendar_item(
+                "reader@example.com",
+                summary="Shared",
+                accessRole="reader",
+            ),
+            _calendar_item(
+                "primary",
+                summary="Personal",
+                summaryOverride="Me",
+                primary=True,
+            ),
+            _calendar_item("hidden", summary="Hidden", selected=False),
+        )
+    )
+
+    result = provider.list_calendars()
+
+    assert result.is_ok
+    assert result.value is not None
+    assert [
+        (calendar.id, calendar.summary, calendar.primary)
+        for calendar in result.value
+    ] == [
+        ("primary", "Primary", True),
+        ("reader@example.com", "Shared", False),
+        ("work@example.com", "Work", False),
+    ]
+
+
+def test_list_calendars_hides_email_named_calendars(
+    service: Mock,
+) -> None:
+    """Only the primary calendar survives when Google names it by email."""
+    provider = GoogleCalendarProvider(service, "me@example.com")
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item(
+                "me@example.com",
+                summary="me@example.com",
+                primary=True,
+            ),
+            _calendar_item(
+                "boss@example.com",
+                summary="boss@example.com",
+                accessRole="writer",
+            ),
+            _calendar_item(
+                "work@group.calendar.google.com",
+                summary="Work",
+                accessRole="writer",
+            ),
+        )
+    )
+
+    result = provider.list_calendars()
+
+    assert result.is_ok
+    assert result.value is not None
+    assert [(calendar.id, calendar.summary) for calendar in result.value] == [
+        ("me@example.com", "Primary"),
+        ("work@group.calendar.google.com", "Work"),
+    ]
+
+
+def test_list_calendars_does_not_duplicate_the_primary_calendar(
+    service: Mock,
+) -> None:
+    """The configured ``primary`` alias does not add a second entry."""
+    provider = GoogleCalendarProvider(service, "primary")
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item(
+                "me@example.com",
+                summary="me@example.com",
+                primary=True,
+            )
+        )
+    )
+
+    result = provider.list_calendars()
+
+    assert result.is_ok
+    assert result.value is not None
+    assert [(calendar.id, calendar.summary) for calendar in result.value] == [
+        ("me@example.com", "Primary"),
+    ]
+
+
+def test_list_calendars_includes_the_configured_default(
+    service: Mock,
+) -> None:
+    """The configured calendar is offered even when Google omits it."""
+    provider = GoogleCalendarProvider(service, "team@example.com")
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(_calendar_item("work@example.com", summary="Work"))
+    )
+
+    result = provider.list_calendars()
+
+    assert result.is_ok
+    assert result.value is not None
+    assert [(calendar.id, calendar.summary) for calendar in result.value] == [
+        ("team@example.com", "team@example.com"),
+        ("work@example.com", "Work"),
+    ]
+
+
+def test_move_event_calls_google_move_and_maps_the_result(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Moving an event uses Google's dedicated move operation."""
+    move = service.events.return_value.move
+    move.return_value.execute.return_value = _resource("event1", summary="Moved")
+
+    result = provider.move_event("primary", "event1", "work@example.com")
+
+    assert result.is_ok
+    assert result.value is not None
+    assert result.value.calendar_id == "work@example.com"
+    assert move.call_args.kwargs == {
+        "calendarId": "primary",
+        "eventId": "event1",
+        "destination": "work@example.com",
+    }
+
+
+def test_move_event_rejects_a_blank_destination(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A move without a destination is an invalid argument."""
+    result = provider.move_event("primary", "event1", " ")
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.INVALID_ARGUMENT
+    service.events.return_value.move.assert_not_called()
+
+
 def test_list_follows_pagination_and_maps_all_day_events(
     provider: GoogleCalendarProvider,
     service: Mock,

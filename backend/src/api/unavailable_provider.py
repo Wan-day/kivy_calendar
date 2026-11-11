@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from api.errors import ErrorCode, Result
+from domain.calendar import CalendarInfo
 from domain.event import Event
 
 
@@ -26,6 +27,19 @@ class UnavailableCalendarProvider:
 
     def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:
         """Fail deletes with an authentication error."""
+        return Result.fail(ErrorCode.AUTH_ERROR, self._message)
+
+    def move_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+        destination_calendar_id: str,
+    ) -> Result[Event]:
+        """Fail moves with an authentication error."""
+        return Result.fail(ErrorCode.AUTH_ERROR, self._message)
+
+    def list_calendars(self) -> Result[list[CalendarInfo]]:
+        """Fail calendar listings with an authentication error."""
         return Result.fail(ErrorCode.AUTH_ERROR, self._message)
 
     def get_event(

@@ -112,6 +112,7 @@ class _RecordingProvider(FakeCalendarProvider):
         self.delete_calls: list[tuple[str, str]] = []
         self.get_calls: list[tuple[str, str]] = []
         self.update_calls: list[str] = []
+        self.move_calls: list[tuple[str, str, str]] = []
 
     def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:
         self.delete_calls.append((calendar_id, event_id))
@@ -128,6 +129,15 @@ class _RecordingProvider(FakeCalendarProvider):
     def update_event(self, event: Event) -> Result[Event]:
         self.update_calls.append(event.calendar_id)
         return super().update_event(event)
+
+    def move_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+        destination_calendar_id: str,
+    ) -> Result[Event]:
+        self.move_calls.append((calendar_id, event_id, destination_calendar_id))
+        return super().move_event(calendar_id, event_id, destination_calendar_id)
 
 
 @pytest.fixture
@@ -377,6 +387,70 @@ def test_update_fills_a_blank_calendar_from_the_cache(
 
     assert _event_result(result).calendar_id == "work@example.com"
     assert provider.update_calls == ["work@example.com"]
+    cached = _cached(repository, event.id)
+    assert cached is not None
+    assert cached.calendar_id == "work@example.com"
+
+
+def test_update_moves_the_event_before_patching_its_fields(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """Choosing another calendar moves the event, then applies the edit."""
+    provider = _RecordingProvider()
+    service = SyncService(provider, repository, retry_queue)
+    event = _event(calendar_id="primary")
+    assert service.create_event(event).is_ok
+
+    result = service.update_event(
+        _event(summary="Updated standup", calendar_id="work@example.com")
+    )
+
+    assert _event_result(result).calendar_id == "work@example.com"
+    assert provider.move_calls == [("primary", event.id, "work@example.com")]
+    assert provider.update_calls == ["work@example.com"]
+    cached = _cached(repository, event.id)
+    assert cached is not None
+    assert cached.calendar_id == "work@example.com"
+    assert cached.summary == "Updated standup"
+
+
+def test_update_move_failure_is_queued_and_replayed(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A failed move is retried together with the field patch."""
+    provider = _RecordingProvider()
+    service = SyncService(provider, repository, retry_queue)
+    event = _event(calendar_id="primary")
+    assert service.create_event(event).is_ok
+    provider.fail_next("move_event", message="calendar list is offline")
+
+    result = service.update_event(
+        _event(summary="Moved standup", calendar_id="work@example.com")
+    )
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.UPSTREAM_ERROR
+    jobs = _jobs(retry_queue.list_due())
+    assert len(jobs) == 1
+    assert jobs[0].operation == UPDATE_OPERATION
+    assert jobs[0].payload["previous_calendar_id"] == "primary"
+    assert Event.model_validate(jobs[0].payload["event"]).calendar_id == (
+        "work@example.com"
+    )
+
+    processed = _jobs(service.process_due_retries())
+
+    assert len(processed) == 1
+    assert processed[0].status is RetryStatus.COMPLETED
+    assert provider.move_calls == [
+        ("primary", event.id, "work@example.com"),
+        ("primary", event.id, "work@example.com"),
+    ]
+    moved = provider.events[0]
+    assert moved.calendar_id == "work@example.com"
+    assert moved.summary == "Moved standup"
     cached = _cached(repository, event.id)
     assert cached is not None
     assert cached.calendar_id == "work@example.com"

@@ -7,12 +7,19 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, Response
 
 from api.auth import verify_api_key
-from api.deps import get_repository, get_slot_service, get_sync_service
+from api.deps import (
+    get_provider,
+    get_repository,
+    get_slot_service,
+    get_sync_service,
+)
 from api.errors import ApiError, error_status
 from api.schemas import FreeSlot, FreeSlotRequest, FreeSlotsResponse, SyncResponse
 from cache.repository import EventRepository
 from core.errors import ErrorCode
+from domain.calendar import CalendarInfo
 from domain.event import Event
+from google_calendar.provider import CalendarProvider
 from slots.service import SlotService
 from sync.service import SyncService
 
@@ -23,6 +30,24 @@ api_router = APIRouter()
 def health() -> dict[str, str]:
     """Return the health status of the backend."""
     return {"status": "ok"}
+
+
+@api_router.get(
+    "/calendars",
+    response_model=list[CalendarInfo],
+    dependencies=[Depends(verify_api_key)],
+)
+def list_calendars(
+    provider: CalendarProvider = Depends(get_provider),
+) -> list[CalendarInfo]:
+    """List the calendars the connected account can write to."""
+    result = provider.list_calendars()
+    if result.is_error:
+        error = result.error
+        if error is None:
+            raise RuntimeError("list calendars failed without an error")
+        raise ApiError(error_status(error), error.code, error.message)
+    return list(result.value or [])
 
 
 @api_router.get(
