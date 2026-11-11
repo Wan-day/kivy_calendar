@@ -572,10 +572,72 @@ def test_list_calendars_maps_summaries_and_marks_the_primary(
 
     assert result.is_ok
     assert result.value is not None
-    assert [(calendar.id, calendar.summary, calendar.primary) for calendar in result.value] == [
-        ("primary", "Me", True),
+    assert [
+        (calendar.id, calendar.summary, calendar.primary)
+        for calendar in result.value
+    ] == [
+        ("primary", "Primary", True),
         ("reader@example.com", "Shared", False),
         ("work@example.com", "Work", False),
+    ]
+
+
+def test_list_calendars_hides_email_named_calendars(
+    service: Mock,
+) -> None:
+    """Only the primary calendar survives when Google names it by email."""
+    provider = GoogleCalendarProvider(service, "me@example.com")
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item(
+                "me@example.com",
+                summary="me@example.com",
+                primary=True,
+            ),
+            _calendar_item(
+                "boss@example.com",
+                summary="boss@example.com",
+                accessRole="writer",
+            ),
+            _calendar_item(
+                "work@group.calendar.google.com",
+                summary="Work",
+                accessRole="writer",
+            ),
+        )
+    )
+
+    result = provider.list_calendars()
+
+    assert result.is_ok
+    assert result.value is not None
+    assert [(calendar.id, calendar.summary) for calendar in result.value] == [
+        ("me@example.com", "Primary"),
+        ("work@group.calendar.google.com", "Work"),
+    ]
+
+
+def test_list_calendars_does_not_duplicate_the_primary_calendar(
+    service: Mock,
+) -> None:
+    """The configured ``primary`` alias does not add a second entry."""
+    provider = GoogleCalendarProvider(service, "primary")
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item(
+                "me@example.com",
+                summary="me@example.com",
+                primary=True,
+            )
+        )
+    )
+
+    result = provider.list_calendars()
+
+    assert result.is_ok
+    assert result.value is not None
+    assert [(calendar.id, calendar.summary) for calendar in result.value] == [
+        ("me@example.com", "Primary"),
     ]
 
 

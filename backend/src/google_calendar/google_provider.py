@@ -79,6 +79,11 @@ DEFAULT_CALENDAR_ID = "primary"
 MAX_RESULTS = 2500
 
 _READABLE_ACCESS_ROLES = frozenset({"owner", "writer", "reader"})
+# Google names the account's own calendar after the user (often the account's
+# email address).  The app always calls it "Primary" so the dropdown never shows
+# an email address as a calendar name.
+PRIMARY_CALENDAR_SUMMARY = "Primary"
+_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _CALENDAR_LIST_AUTH_MESSAGE = (
     "Google Calendar calendar list access failed: the OAuth refresh token "
     "does not grant the calendar.calendarlist.readonly scope. Re-run "
@@ -237,16 +242,25 @@ class GoogleCalendarProvider:
         )
 
     def list_calendars(self) -> Result[list[CalendarInfo]]:
-        """Return every readable calendar, with the primary calendar first.
+        """Return the calendars offered in the event form, primary first.
 
-        The configured default calendar is always included, even when Google's
-        calendar list does not expose it (for example when the list scope is
-        missing but the calendar itself is writable).
+        Calendars Google names after an email address are hidden unless they
+        are the account's primary calendar or the configured default; the
+        primary calendar is always shown as "Primary".  The configured default
+        calendar is included even when Google's calendar list does not expose
+        it (for example when the list scope is missing but the calendar itself
+        is writable).
         """
         entries = self._calendar_entries()
         if entries.error is not None:
             return Result.fail(entries.error.code, entries.error.message)
-        calendars = entries.value or []
+        calendars = [
+            calendar
+            for calendar in entries.value or []
+            if calendar.primary
+            or calendar.id == self._calendar_id
+            or _EMAIL_PATTERN.fullmatch(calendar.summary) is None
+        ]
         calendars.sort(
             key=lambda calendar: (
                 not calendar.primary,
@@ -354,10 +368,18 @@ class GoogleCalendarProvider:
             page_token = _next_page_token(response.value)
             if page_token is None:
                 break
-        if self._calendar_id not in seen:
+        if self._calendar_id not in seen and not (
+            self._calendar_id == DEFAULT_CALENDAR_ID
+            and any(calendar.primary for calendar in entries)
+        ):
+            summary = (
+                PRIMARY_CALENDAR_SUMMARY
+                if self._calendar_id == DEFAULT_CALENDAR_ID
+                else self._calendar_id
+            )
             entries.insert(
                 0,
-                CalendarInfo(id=self._calendar_id, summary=self._calendar_id),
+                CalendarInfo(id=self._calendar_id, summary=summary),
             )
         return Result.ok(entries)
 
@@ -772,13 +794,19 @@ def _calendar_info(item: object) -> CalendarInfo | None:
     calendar_id = _readable_calendar_id(item)
     if calendar_id is None or not isinstance(item, dict):
         return None
+    primary = item.get("primary") is True
     summary = item.get("summaryOverride") or item.get("summary") or calendar_id
     if not isinstance(summary, str) or not summary.strip():
         summary = calendar_id
+    summary = summary.strip()
+    if primary:
+        # The account's own calendar is always offered as "Primary", even when
+        # Google names it after the account's email address.
+        summary = PRIMARY_CALENDAR_SUMMARY
     return CalendarInfo(
         id=calendar_id,
-        summary=summary.strip(),
-        primary=item.get("primary") is True,
+        summary=summary,
+        primary=primary,
     )
 
 
