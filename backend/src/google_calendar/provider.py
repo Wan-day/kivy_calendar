@@ -13,6 +13,7 @@ from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from core.errors import Result
+from domain.calendar import CalendarInfo
 from domain.event import Event
 
 
@@ -21,9 +22,11 @@ class ProviderOperation(StrEnum):
 
     CREATE = "create_event"
     UPDATE = "update_event"
+    MOVE = "move_event"
     DELETE = "delete_event"
     GET = "get_event"
     LIST = "list_events"
+    LIST_CALENDARS = "list_calendars"
 
 
 @runtime_checkable
@@ -50,6 +53,24 @@ class CalendarProvider(Protocol):
         Implementations should preserve fields they do not model, so update is
         a partial write rather than a destructive replace.
         """
+        ...
+
+    def move_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+        destination_calendar_id: str,
+    ) -> Result[Event]:
+        """Move an event from one calendar to another, returning the moved copy.
+
+        Moving is a distinct upstream operation because an event's calendar is
+        part of its identity in the API.  A blank ``calendar_id`` means the
+        implementation's configured default calendar.
+        """
+        ...
+
+    def list_calendars(self) -> Result[list[CalendarInfo]]:
+        """Return every calendar the connected account can write to."""
         ...
 
     def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:

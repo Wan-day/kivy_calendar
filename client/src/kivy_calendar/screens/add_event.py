@@ -19,7 +19,13 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 
-from kivy_calendar.api import BackendClient, BackendError, CalendarEvent, FreeSlot
+from kivy_calendar.api import (
+    BackendClient,
+    BackendError,
+    CalendarEvent,
+    CalendarSummary,
+    FreeSlot,
+)
 from kivy_calendar.formatting import (
     DEFAULT_TIME_ZONE,
     UTC_OFFSET_LABELS,
@@ -120,8 +126,17 @@ class AddEventScreen(Screen):
         self.refresh = refresh
         self.time_zone = time_zone
         self.event: CalendarEvent | None = None
+        self._calendars: list[CalendarSummary] = []
+        self._calendar_labels: dict[str, str] = {}
+        self._labels_by_calendar: dict[str, str] = {}
 
         self.summary = _input("Team standup")
+        self.calendar = Spinner(
+            text="",
+            values=[],
+            size_hint_y=None,
+            height=44,
+        )
         self.start = _input("")
         self.end = _input("")
         self.start_timezone = _time_zone_spinner(self.time_zone)
@@ -137,6 +152,7 @@ class AddEventScreen(Screen):
         )
         form.bind(minimum_height=form.setter("height"))
         form.add_widget(_field("Summary", self.summary))
+        form.add_widget(_field("Calendar", self.calendar))
 
         all_day_row = BoxLayout(
             orientation="horizontal",
@@ -221,6 +237,7 @@ class AddEventScreen(Screen):
     def open_for(self, event: CalendarEvent | None) -> None:
         """Fill the form for creating a new event or editing ``event``."""
         self.event = event
+        self.calendar.text = ""
         if event is None:
             self.title_label.text = "New event"
             self._reset_form()
@@ -244,6 +261,7 @@ class AddEventScreen(Screen):
             self._apply_all_day_mode(event.all_day)
         self._set_buttons_enabled(True)
         self._set_status("")
+        self._load_calendars()
 
     def on_enter(self, *args: Any) -> None:
         """Clear any message left over from a previous visit."""
@@ -294,6 +312,69 @@ class AddEventScreen(Screen):
     def _on_saved(self) -> None:
         """Return to the main screen and refresh the event list."""
         self._return_to_main()
+
+    def _load_calendars(self) -> None:
+        """Fetch the writable calendars for the dropdown off the UI thread."""
+        client = self.client
+        if client is None:
+            return
+        self.calendar.disabled = True
+        thread = threading.Thread(
+            target=self._fetch_calendars,
+            args=(client,),
+            daemon=True,
+        )
+        thread.start()
+
+    def _fetch_calendars(self, client: BackendClient) -> None:
+        """Load calendars in the background and apply them on the UI thread."""
+        try:
+            calendars = client.list_calendars()
+        except BackendError as error:
+            message = error.message
+            Clock.schedule_once(lambda *_: self._on_calendars_failed(message))
+            return
+        Clock.schedule_once(lambda *_: self._on_calendars_loaded(calendars))
+
+    def _on_calendars_loaded(self, calendars: list[CalendarSummary]) -> None:
+        """Fill the dropdown and select the event's calendar."""
+        self._calendars = list(calendars)
+        self._calendar_labels = {}
+        self._labels_by_calendar = {}
+        labels: list[str] = []
+        for calendar in self._calendars:
+            label = calendar.summary
+            if label in self._calendar_labels:
+                label = f"{calendar.summary} ({calendar.id})"
+            self._calendar_labels[label] = calendar.id
+            self._labels_by_calendar[calendar.id] = label
+            labels.append(label)
+        self.calendar.values = labels
+        self.calendar.disabled = not labels
+        self._select_current_calendar()
+
+    def _on_calendars_failed(self, message: str) -> None:
+        """Report that calendars could not be loaded and keep saving usable."""
+        self.calendar.disabled = True
+        self._set_status(f"Could not load calendars: {message}", error=True)
+
+    def _select_current_calendar(self) -> None:
+        """Select the edited event's calendar, or the primary calendar."""
+        event = self.event
+        if event is not None and event.calendar_id:
+            label = self._labels_by_calendar.get(event.calendar_id)
+            self.calendar.text = label if label is not None else event.calendar_id
+            return
+        for calendar in self._calendars:
+            if calendar.primary:
+                self.calendar.text = self._labels_by_calendar[calendar.id]
+                return
+        if self._calendars:
+            self.calendar.text = self._labels_by_calendar[self._calendars[0].id]
+
+    def _selected_calendar_id(self) -> str:
+        """Return the calendar id behind the dropdown selection, or blank."""
+        return self._calendar_labels.get(self.calendar.text.strip(), "")
 
     def suggest_free_time(self, *args: Any) -> None:
         """Ask the backend for a free window and fill the form with it."""
@@ -563,6 +644,9 @@ class AddEventScreen(Screen):
                 self._set_status("End must be after start.", error=True)
                 return None
             all_day = False
+        calendar_id = self._selected_calendar_id()
+        if not calendar_id and existing is not None:
+            calendar_id = existing.calendar_id
         return CalendarEvent(
             id=existing.id if existing is not None else uuid4().hex,
             summary=self.summary.text.strip() or "Untitled event",
@@ -570,7 +654,7 @@ class AddEventScreen(Screen):
             end=end,
             start_timezone=start_timezone,
             end_timezone=end_timezone,
-            calendar_id=existing.calendar_id if existing is not None else "",
+            calendar_id=calendar_id,
             recurring_event_id=(
                 existing.recurring_event_id if existing is not None else None
             ),

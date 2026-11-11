@@ -12,7 +12,13 @@ from typing import Literal, Self
 
 import pytest
 
-from kivy_calendar.api import BackendClient, BackendError, CalendarEvent, FreeSlot
+from kivy_calendar.api import (
+    BackendClient,
+    BackendError,
+    CalendarEvent,
+    CalendarSummary,
+    FreeSlot,
+)
 
 BASE_URL = "http://backend.test"
 
@@ -71,6 +77,47 @@ def test_list_events_returns_backend_events(monkeypatch: pytest.MonkeyPatch) -> 
     assert event.calendar_id == "work@example.com"
     assert event.start == datetime.fromisoformat("2026-11-06T09:00:00+01:00")
     assert event.end == datetime.fromisoformat("2026-11-06T09:30:00+01:00")
+
+
+def test_list_calendars_returns_backend_calendars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The client maps backend calendar payloads into client calendars."""
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        return _FakeResponse(
+            [
+                {"id": "primary", "summary": "Primary", "primary": True},
+                {"id": "work@example.com", "summary": "Work"},
+            ]
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    calendars = _client().list_calendars()
+
+    assert calendars == [
+        CalendarSummary(id="primary", summary="Primary", primary=True),
+        CalendarSummary(id="work@example.com", summary="Work", primary=False),
+    ]
+
+
+def test_list_calendars_rejects_a_payload_without_an_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed calendar entry is reported as an invalid response."""
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout=0: _FakeResponse([{"summary": "Work"}]),
+    )
+
+    with pytest.raises(BackendError) as error_info:
+        _client().list_calendars()
+
+    assert error_info.value.code == "invalid_response"
 
 
 def test_create_event_posts_the_backend_payload(

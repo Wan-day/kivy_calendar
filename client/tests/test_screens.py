@@ -36,6 +36,9 @@ class FakeClient:
         self.list_calls = 0
         self.free_slots: list[Any] = []
         self.free_slot_requests: list[tuple[int, datetime, datetime, str]] = []
+        self.calendar_calls = 0
+        self.calendars: list[Any] | None = None
+        self.calendar_error: BaseException | None = None
 
     def create_event(self, event: Any) -> Any:
         """Record a create and return the event unchanged."""
@@ -55,6 +58,20 @@ class FakeClient:
         """Return no events."""
         self.list_calls += 1
         return []
+
+    def list_calendars(self) -> list[Any]:
+        """Return the configured calendars, or a primary and a work calendar."""
+        from kivy_calendar.api import CalendarSummary
+
+        self.calendar_calls += 1
+        if self.calendar_error is not None:
+            raise self.calendar_error
+        if self.calendars is not None:
+            return list(self.calendars)
+        return [
+            CalendarSummary(id="primary", summary="Primary", primary=True),
+            CalendarSummary(id="work@example.com", summary="Work"),
+        ]
 
     def sync(self) -> int:
         """Record a sync and return the configured count."""
@@ -554,6 +571,69 @@ def test_add_event_maps_a_utc_label_to_a_fixed_offset_zone() -> None:
     assert event is not None
     assert event.start_timezone == "Etc/GMT-1"
     assert event.end_timezone == "Etc/GMT-1"
+
+
+def test_event_form_lists_calendars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The form offers the connected account's calendars as a dropdown."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+
+    assert add_event_screen.calendar.values == ["Primary", "Work"]
+    assert add_event_screen.calendar.text == "Primary"
+    assert add_event_screen.calendar.disabled is False
+
+
+def test_add_event_uses_the_selected_calendar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new event is written to the calendar picked in the dropdown."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.summary.text = "Dentist"
+    add_event_screen.start.text = "2026-11-09T15:00+01:00"
+    add_event_screen.end.text = "2026-11-09T16:30+01:00"
+    add_event_screen.calendar.text = "Work"
+
+    event = add_event_screen._build_event()
+
+    assert event is not None
+    assert event.calendar_id == "work@example.com"
+
+
+def test_edit_form_selects_the_event_calendar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Editing preselects the calendar the event belongs to."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+
+    add_event_screen.open_for(_sample_event())
+
+    assert add_event_screen.calendar.text == "Work"
+
+
+def test_calendar_load_failure_keeps_the_form_usable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed calendar list is reported without blocking the save fallback."""
+    from kivy_calendar.api import BackendError
+
+    client = FakeClient()
+    client.calendar_error = BackendError(0, "network_error", "offline")
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(client)
+    add_event_screen.summary.text = "Dentist"
+    add_event_screen.start.text = "2026-11-09T15:00+01:00"
+    add_event_screen.end.text = "2026-11-09T16:30+01:00"
+
+    event = add_event_screen._build_event()
+
+    assert add_event_screen.calendar.disabled
+    assert "Could not load calendars" in add_event_screen.status_label.text
+    assert event is not None
+    assert event.calendar_id == ""
 
 
 def test_add_event_builds_an_all_day_event() -> None:

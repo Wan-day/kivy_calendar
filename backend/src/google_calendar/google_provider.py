@@ -71,6 +71,7 @@ from googleapiclient.discovery import build  # type: ignore[import-untyped]
 from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
 from core.errors import Error, ErrorCode, Result
+from domain.calendar import CalendarInfo
 from domain.event import Event
 from google_calendar.recurrence import expand_event
 
@@ -205,6 +206,55 @@ class GoogleCalendarProvider:
             calendar_id,
         )
 
+    def move_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+        destination_calendar_id: str,
+    ) -> Result[Event]:
+        """Move an event to another calendar, returning the moved copy.
+
+        Google treats a calendar as part of an event's identity, so a move is a
+        dedicated operation rather than a field change on ``patch``.
+        """
+        source = calendar_id or self._calendar_id
+        destination = destination_calendar_id or self._calendar_id
+        if not destination.strip():
+            return Result.fail(
+                ErrorCode.INVALID_ARGUMENT,
+                "destination calendar id must not be blank",
+            )
+        invalid = _event_id_error(event_id)
+        if invalid is not None:
+            return Result.fail(invalid.code, invalid.message)
+        return self._event_request(
+            lambda: self._service.events().move(
+                calendarId=source,
+                eventId=event_id,
+                destination=destination,
+            ),
+            destination,
+        )
+
+    def list_calendars(self) -> Result[list[CalendarInfo]]:
+        """Return every readable calendar, with the primary calendar first.
+
+        The configured default calendar is always included, even when Google's
+        calendar list does not expose it (for example when the list scope is
+        missing but the calendar itself is writable).
+        """
+        entries = self._calendar_entries()
+        if entries.error is not None:
+            return Result.fail(entries.error.code, entries.error.message)
+        calendars = entries.value or []
+        calendars.sort(
+            key=lambda calendar: (
+                not calendar.primary,
+                calendar.summary.casefold(),
+            )
+        )
+        return Result.ok(calendars)
+
     def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:
         """Delete the upstream event, reporting a missing event as an error."""
         target = calendar_id or self._calendar_id
@@ -267,7 +317,19 @@ class GoogleCalendarProvider:
 
     def _calendar_ids(self) -> Result[list[str]]:
         """Return the configured default calendar and every readable calendar."""
+        entries = self._calendar_entries()
+        if entries.error is not None:
+            return Result.fail(entries.error.code, entries.error.message)
         calendar_ids = [self._calendar_id]
+        for calendar in entries.value or []:
+            if calendar.id not in calendar_ids:
+                calendar_ids.append(calendar.id)
+        return Result.ok(calendar_ids)
+
+    def _calendar_entries(self) -> Result[list[CalendarInfo]]:
+        """Return readable calendars from Google's calendar list, paginated."""
+        entries: list[CalendarInfo] = []
+        seen: set[str] = set()
         page_token: str | None = None
         while True:
             query: dict[str, Any] = {"maxResults": MAX_RESULTS}
@@ -283,14 +345,21 @@ class GoogleCalendarProvider:
             if items.error is not None:
                 return Result.fail(items.error.code, items.error.message)
             for item in items.value or []:
-                calendar_id = _readable_calendar_id(item)
-                if calendar_id is not None and calendar_id not in calendar_ids:
-                    calendar_ids.append(calendar_id)
+                calendar = _calendar_info(item)
+                if calendar is None or calendar.id in seen:
+                    continue
+                seen.add(calendar.id)
+                entries.append(calendar)
 
             page_token = _next_page_token(response.value)
             if page_token is None:
                 break
-        return Result.ok(calendar_ids)
+        if self._calendar_id not in seen:
+            entries.insert(
+                0,
+                CalendarInfo(id=self._calendar_id, summary=self._calendar_id),
+            )
+        return Result.ok(entries)
 
     def _list_calendar_events(self, calendar_id: str) -> Result[list[Event]]:
         """Return every timed event in one calendar, following pagination."""
@@ -696,6 +765,21 @@ def _readable_calendar_id(item: object) -> str | None:
     if not isinstance(calendar_id, str) or not calendar_id.strip():
         return None
     return calendar_id
+
+
+def _calendar_info(item: object) -> CalendarInfo | None:
+    """Map a Google calendar-list entry, or ``None`` when it is skipped."""
+    calendar_id = _readable_calendar_id(item)
+    if calendar_id is None or not isinstance(item, dict):
+        return None
+    summary = item.get("summaryOverride") or item.get("summary") or calendar_id
+    if not isinstance(summary, str) or not summary.strip():
+        summary = calendar_id
+    return CalendarInfo(
+        id=calendar_id,
+        summary=summary.strip(),
+        primary=item.get("primary") is True,
+    )
 
 
 def _next_page_token(raw: object) -> str | None:
