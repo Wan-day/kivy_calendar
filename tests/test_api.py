@@ -11,6 +11,7 @@ from cache.repository import EventRepository
 from core.config import Settings
 from core.errors import ErrorCode, Result
 from core.sqlite import Database
+from domain.calendar import CalendarInfo
 from domain.event import Event
 from fastapi.testclient import TestClient
 from google_calendar.auth import CALENDAR_SCOPES
@@ -168,6 +169,43 @@ def test_health_returns_ok(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_calendars_endpoint_lists_the_account_calendars(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """The calendars endpoint exposes the provider's writable calendars."""
+    provider = FakeCalendarProvider(
+        calendars=[
+            CalendarInfo(id="work@example.com", summary="Work"),
+            CalendarInfo(id="primary", summary="Primary", primary=True),
+        ]
+    )
+    client = _make_client(provider, repository, retry_queue)
+
+    response = client.get("/calendars", headers=_auth_headers())
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"id": "work@example.com", "summary": "Work", "primary": False},
+        {"id": "primary", "summary": "Primary", "primary": True},
+    ]
+
+
+def test_calendars_endpoint_reports_a_provider_failure(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A failing calendar list becomes a structured upstream error."""
+    provider = FakeCalendarProvider()
+    provider.fail_next("list_calendars", message="calendar list is offline")
+    client = _make_client(provider, repository, retry_queue)
+
+    response = client.get("/calendars", headers=_auth_headers())
+
+    assert response.status_code == 503
+    assert _error_code(response) == ErrorCode.UPSTREAM_ERROR.value
 
 
 def test_protected_endpoints_reject_a_missing_bearer_token(client: TestClient) -> None:

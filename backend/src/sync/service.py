@@ -28,6 +28,7 @@ DEFAULT_RETRY_LEASE = timedelta(minutes=5)
 _EVENT_PAYLOAD_KEY = "event"
 _EVENT_ID_PAYLOAD_KEY = "event_id"
 _CALENDAR_ID_PAYLOAD_KEY = "calendar_id"
+_PREVIOUS_CALENDAR_ID_PAYLOAD_KEY = "previous_calendar_id"
 
 
 class SyncService:
@@ -79,19 +80,47 @@ class SyncService:
         """Update ``event`` in Google first, then refresh the cached copy.
 
         A blank ``calendar_id`` is filled from the cached event so an edit
-        targets the calendar the event came from.  If the cache lookup fails the
-        provider falls back to its configured default calendar.
+        targets the calendar the event came from.  When the edit moves the
+        event, the provider's move operation runs before the field patch; the
+        move is replayed with the queued update if either call fails.  If the
+        cache lookup fails the provider falls back to its configured default
+        calendar.
         """
+        cached_calendar = self._cached_calendar_id(event.id)
         resolved = event
         if not event.calendar_id:
-            resolved = event.model_copy(
-                update={"calendar_id": self._cached_calendar_id(event.id)}
+            resolved = event.model_copy(update={"calendar_id": cached_calendar})
+
+        previous_calendar = ""
+        if (
+            cached_calendar
+            and resolved.calendar_id
+            and cached_calendar != resolved.calendar_id
+            and not resolved.recurring_event_id
+        ):
+            previous_calendar = cached_calendar
+            moved = self._provider.move_event(
+                previous_calendar,
+                resolved.id,
+                resolved.calendar_id,
             )
+            # A missing source event means a previous attempt already moved it;
+            # the patch below confirms the event exists in the destination.
+            if (
+                moved.error is not None
+                and moved.error.code is not ErrorCode.NOT_FOUND
+            ):
+                return self._queue_failed_write(
+                    UPDATE_OPERATION,
+                    _update_payload(resolved, previous_calendar),
+                    moved.error,
+                )
+
         result = self._provider.update_event(resolved)
         if result.error is not None:
             return self._queue_failed_write(
                 UPDATE_OPERATION,
-                {_EVENT_PAYLOAD_KEY: resolved.model_dump(mode="json")},
+                _update_payload(resolved, previous_calendar),
                 result.error,
             )
 
@@ -232,6 +261,23 @@ class SyncService:
         if operation is ProviderOperation.CREATE:
             result = self._provider.create_event(event)
         else:
+            previous_calendar = _previous_calendar_id_from_payload(job.payload)
+            if (
+                previous_calendar
+                and previous_calendar != event.calendar_id
+                and not event.recurring_event_id
+            ):
+                moved = self._provider.move_event(
+                    previous_calendar,
+                    event.id,
+                    event.calendar_id,
+                )
+                # The move may already have succeeded on an earlier attempt.
+                if (
+                    moved.error is not None
+                    and moved.error.code is not ErrorCode.NOT_FOUND
+                ):
+                    return self._record_provider_failure(job, moved.error, now=now)
             result = self._provider.update_event(event)
 
         if result.error is not None:
@@ -412,6 +458,20 @@ def _calendar_id_from_payload(payload: dict[str, Any]) -> str:
     """Return a delete payload's calendar id, defaulting old jobs to blank."""
     calendar_id = payload.get(_CALENDAR_ID_PAYLOAD_KEY)
     return calendar_id if isinstance(calendar_id, str) else ""
+
+
+def _previous_calendar_id_from_payload(payload: dict[str, Any]) -> str:
+    """Return the calendar an update moves from, or blank for old jobs."""
+    calendar_id = payload.get(_PREVIOUS_CALENDAR_ID_PAYLOAD_KEY)
+    return calendar_id if isinstance(calendar_id, str) else ""
+
+
+def _update_payload(event: Event, previous_calendar_id: str) -> dict[str, Any]:
+    """Build a retry payload that can replay a move before the patch."""
+    payload: dict[str, Any] = {_EVENT_PAYLOAD_KEY: event.model_dump(mode="json")}
+    if previous_calendar_id:
+        payload[_PREVIOUS_CALENDAR_ID_PAYLOAD_KEY] = previous_calendar_id
+    return payload
 
 
 def _describe_error(error: Error) -> str:

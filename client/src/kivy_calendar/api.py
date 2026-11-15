@@ -52,6 +52,15 @@ class CalendarEvent:
 
 
 @dataclass(frozen=True)
+class CalendarSummary:
+    """A calendar the backend can write events to."""
+
+    id: str
+    summary: str
+    primary: bool = False
+
+
+@dataclass(frozen=True)
 class FreeSlot:
     """A free time window suggested by the backend."""
 
@@ -95,6 +104,17 @@ class BackendClient:
         for item in payload:
             events.append(self._event_from_payload(item))
         return events
+
+    def list_calendars(self) -> list[CalendarSummary]:
+        """Return the calendars the backend can write events to."""
+        payload = self._request("/calendars", method="GET")
+        if not isinstance(payload, list):
+            raise BackendError(
+                500,
+                "invalid_response",
+                "backend returned an unexpected calendar list",
+            )
+        return [self._calendar_from_payload(item) for item in payload]
 
     def create_event(self, event: CalendarEvent) -> CalendarEvent:
         """Create an event in the backend calendar."""
@@ -266,6 +286,28 @@ class BackendClient:
                 if isinstance(extended_properties, dict)
                 else None
             ),
+        )
+
+    def _calendar_from_payload(self, payload: object) -> CalendarSummary:
+        """Turn a backend calendar payload into a client calendar."""
+        if not isinstance(payload, dict):
+            raise BackendError(
+                500,
+                "invalid_response",
+                "backend returned an unexpected calendar",
+            )
+        calendar_id = str(payload.get("id") or "")
+        summary = str(payload.get("summary") or "")
+        if not calendar_id.strip() or not summary.strip():
+            raise BackendError(
+                500,
+                "invalid_response",
+                "backend returned a calendar without an id or summary",
+            )
+        return CalendarSummary(
+            id=calendar_id,
+            summary=summary,
+            primary=bool(payload.get("primary") or False),
         )
 
     @staticmethod
