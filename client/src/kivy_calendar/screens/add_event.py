@@ -25,13 +25,11 @@ from kivy_calendar.api import (
     CalendarEvent,
     CalendarSummary,
     FreeSlot,
+    TimeZoneOption,
 )
 from kivy_calendar.formatting import (
     DEFAULT_TIME_ZONE,
-    UTC_OFFSET_LABELS,
     default_event_times,
-    time_zone_from_label,
-    time_zone_label,
     to_input_value,
 )
 from kivy_calendar.screens.ui import wrapped_label
@@ -100,10 +98,10 @@ def _input(
 
 
 def _time_zone_spinner(default: str) -> Spinner:
-    """Create a dropdown with one fixed UTC offset per hour."""
+    """Create a time zone dropdown; the backend fills in the choices."""
     return Spinner(
-        text=time_zone_label(default),
-        values=list(UTC_OFFSET_LABELS),
+        text=default,
+        values=[default],
         size_hint_y=None,
         height=44,
     )
@@ -129,6 +127,9 @@ class AddEventScreen(Screen):
         self._calendars: list[CalendarSummary] = []
         self._calendar_labels: dict[str, str] = {}
         self._labels_by_calendar: dict[str, str] = {}
+        self._time_zone_names: dict[str, str] = {}
+        self._time_zone_labels: dict[str, str] = {}
+        self._curated_zones: list[TimeZoneOption] = []
 
         self.summary = _input("Team standup")
         self.calendar = Spinner(
@@ -255,13 +256,15 @@ class AddEventScreen(Screen):
             else:
                 self.start.text = to_input_value(event.start)
                 self.end.text = to_input_value(event.end)
-            self.start_timezone.text = time_zone_label(event.start_timezone)
-            self.end_timezone.text = time_zone_label(event.end_timezone)
+            self._refresh_time_zone_choices(
+                event.start_timezone, event.end_timezone
+            )
             self.description.text = event.description or ""
             self._apply_all_day_mode(event.all_day)
         self._set_buttons_enabled(True)
         self._set_status("")
         self._load_calendars()
+        self._load_time_zones()
 
     def on_enter(self, *args: Any) -> None:
         """Clear any message left over from a previous visit."""
@@ -312,6 +315,60 @@ class AddEventScreen(Screen):
     def _on_saved(self) -> None:
         """Return to the main screen and refresh the event list."""
         self._return_to_main()
+
+    def _load_time_zones(self) -> None:
+        """Fetch the curated time zones for the dropdowns off the UI thread."""
+        client = self.client
+        if client is None:
+            return
+        thread = threading.Thread(
+            target=self._fetch_time_zones,
+            args=(client,),
+            daemon=True,
+        )
+        thread.start()
+
+    def _fetch_time_zones(self, client: BackendClient) -> None:
+        """Load time zones in the background and apply them on the UI thread."""
+        try:
+            zones = client.list_time_zones()
+        except BackendError as error:
+            message = error.message
+            Clock.schedule_once(lambda *_: self._on_time_zones_failed(message))
+            return
+        Clock.schedule_once(lambda *_: self._on_time_zones_loaded(zones))
+
+    def _on_time_zones_loaded(self, zones: list[TimeZoneOption]) -> None:
+        """Offer the backend's zones, keeping the current selection."""
+        self._curated_zones = list(zones)
+        self._refresh_time_zone_choices(
+            self._resolved_time_zone(self.start_timezone.text),
+            self._resolved_time_zone(self.end_timezone.text),
+        )
+
+    def _on_time_zones_failed(self, message: str) -> None:
+        """Report that time zones could not be loaded; the current zone stays."""
+        self._set_status(f"Could not load time zones: {message}", error=True)
+
+    def _refresh_time_zone_choices(self, start_zone: str, end_zone: str) -> None:
+        """Rebuild the dropdowns and select ``start_zone`` and ``end_zone``.
+
+        The two zones are always selectable, even when the backend's curated
+        list does not contain them.
+        """
+        options = list(self._curated_zones)
+        known = {option.name for option in options}
+        for zone in (start_zone, end_zone):
+            if zone and zone not in known:
+                options.insert(0, TimeZoneOption(name=zone, label=zone))
+                known.add(zone)
+        self._time_zone_names = {option.label: option.name for option in options}
+        self._time_zone_labels = {option.name: option.label for option in options}
+        values = [option.label for option in options]
+        self.start_timezone.values = values
+        self.end_timezone.values = values
+        self.start_timezone.text = self._time_zone_labels.get(start_zone, start_zone)
+        self.end_timezone.text = self._time_zone_labels.get(end_zone, end_zone)
 
     def _load_calendars(self) -> None:
         """Fetch the writable calendars for the dropdown off the UI thread."""
@@ -671,7 +728,7 @@ class AddEventScreen(Screen):
     def _resolved_time_zone(self, raw: str) -> str:
         """Return the IANA zone for a dropdown label or a zone name."""
         text = raw.strip()
-        return time_zone_from_label(text) or text or self.time_zone
+        return self._time_zone_names.get(text) or text or self.time_zone
 
     @staticmethod
     def _is_known_time_zone(name: str) -> bool:
@@ -690,8 +747,7 @@ class AddEventScreen(Screen):
         self.description.text = ""
         self.start.text = to_input_value(start)
         self.end.text = to_input_value(end)
-        self.start_timezone.text = time_zone_label(self.time_zone)
-        self.end_timezone.text = time_zone_label(self.time_zone)
+        self._refresh_time_zone_choices(self.time_zone, self.time_zone)
         self._apply_all_day_mode(False)
 
     def _set_buttons_enabled(self, enabled: bool) -> None:

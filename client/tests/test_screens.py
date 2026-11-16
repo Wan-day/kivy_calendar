@@ -39,6 +39,19 @@ class FakeClient:
         self.calendar_calls = 0
         self.calendars: list[Any] | None = None
         self.calendar_error: BaseException | None = None
+        self.time_zones: list[Any] | None = None
+
+    def list_time_zones(self) -> list[Any]:
+        """Return the configured zones, or a small curated list."""
+        from kivy_calendar.api import TimeZoneOption
+
+        if self.time_zones is not None:
+            return list(self.time_zones)
+        return [
+            TimeZoneOption(name="Europe/Berlin", label="Berlin (UTC+01:00)"),
+            TimeZoneOption(name="Asia/Kolkata", label="Kolkata (UTC+05:30)"),
+            TimeZoneOption(name="America/New_York", label="New York (UTC-05:00)"),
+        ]
 
     def create_event(self, event: Any) -> Any:
         """Record a create and return the event unchanged."""
@@ -535,42 +548,82 @@ def test_main_screen_reports_an_invalid_date_filter() -> None:
     assert len(main_screen.event_list.children) == 1
 
 
-def test_event_form_uses_time_zone_dropdowns() -> None:
-    """Time zones are chosen from a 24-entry UTC offset dropdown."""
+def test_event_form_offers_backend_time_zones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The dropdowns list the backend's IANA zones and default to the config."""
     from kivy.uix.spinner import Spinner
 
+    _run_inline(monkeypatch)
     _, _, add_event_screen = _make_screens(FakeClient())
-    values = add_event_screen.start_timezone.values
-    end_values = add_event_screen.end_timezone.values
 
     assert isinstance(add_event_screen.start_timezone, Spinner)
     assert isinstance(add_event_screen.end_timezone, Spinner)
-    assert len(values) == 24
-    assert any(value.startswith("UTC+0 ") for value in values)
-    assert any(value.startswith("UTC-1 ") for value in end_values)
-    assert "UTC+1 (Berlin, Paris, Rome)" in values
-    assert add_event_screen.start_timezone.text == "Europe/Berlin"
+    assert "Kolkata (UTC+05:30)" in add_event_screen.start_timezone.values
+    assert "Kolkata (UTC+05:30)" in add_event_screen.end_timezone.values
+    assert add_event_screen.start_timezone.text == "Berlin (UTC+01:00)"
+    assert add_event_screen.end_timezone.text == "Berlin (UTC+01:00)"
 
 
-def test_add_event_maps_a_utc_label_to_a_fixed_offset_zone() -> None:
-    """Picking UTC+1 saves the matching IANA fixed-offset zone."""
+def test_add_event_saves_the_iana_zone_behind_a_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Picking a half-hour zone saves its IANA name, not a fixed offset."""
+    _run_inline(monkeypatch)
     _, _, add_event_screen = _make_screens(FakeClient())
-    utc_plus_one = next(
-        value
-        for value in add_event_screen.start_timezone.values
-        if value.startswith("UTC+1 ")
-    )
-    add_event_screen.summary.text = "Dentist"
-    add_event_screen.start.text = "2026-11-09T15:00+01:00"
-    add_event_screen.end.text = "2026-11-09T16:30+01:00"
-    add_event_screen.start_timezone.text = utc_plus_one
-    add_event_screen.end_timezone.text = utc_plus_one
+    add_event_screen.summary.text = "Call"
+    add_event_screen.start.text = "2026-11-09T15:00+05:30"
+    add_event_screen.end.text = "2026-11-09T16:30+05:30"
+    add_event_screen.start_timezone.text = "Kolkata (UTC+05:30)"
+    add_event_screen.end_timezone.text = "Kolkata (UTC+05:30)"
 
     event = add_event_screen._build_event()
 
     assert event is not None
-    assert event.start_timezone == "Etc/GMT-1"
-    assert event.end_timezone == "Etc/GMT-1"
+    assert event.start_timezone == "Asia/Kolkata"
+    assert event.end_timezone == "Asia/Kolkata"
+
+
+def test_edit_form_keeps_a_zone_missing_from_the_curated_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An event's own zone stays selectable even when the backend omits it."""
+    from kivy_calendar.api import CalendarEvent
+
+    _run_inline(monkeypatch)
+    client = FakeClient()
+    _, _, add_event_screen = _make_screens(client)
+    event = CalendarEvent(
+        id="e1",
+        summary="Odd",
+        start=datetime(2026, 11, 9, 15, 0, tzinfo=ZoneInfo("Europe/Oslo")),
+        end=datetime(2026, 11, 9, 16, 0, tzinfo=ZoneInfo("Europe/Oslo")),
+        start_timezone="Europe/Oslo",
+        end_timezone="Europe/Oslo",
+    )
+
+    add_event_screen.open_for(event)
+
+    assert add_event_screen.start_timezone.text == "Europe/Oslo"
+    assert "Europe/Oslo" in add_event_screen.start_timezone.values
+    assert "Berlin (UTC+01:00)" in add_event_screen.start_timezone.values
+    built = add_event_screen._build_event()
+    assert built is not None
+    assert built.start_timezone == "Europe/Oslo"
+
+
+def test_edit_form_can_return_to_the_default_zone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After picking another zone, Berlin is still in the dropdown."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.start_timezone.text = "New York (UTC-05:00)"
+    add_event_screen.start_timezone.text = "Berlin (UTC+01:00)"
+
+    assert add_event_screen._resolved_time_zone(
+        add_event_screen.start_timezone.text
+    ) == "Europe/Berlin"
 
 
 def test_event_form_lists_calendars(
