@@ -475,3 +475,51 @@ def test_find_free_slots_rejects_a_malformed_response(
     assert exc_info.value.status_code == 500
     assert exc_info.value.code == "invalid_response"
 
+
+
+def test_queued_write_responses_are_accepted_not_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 202 body with status "queued" marks the result as queued."""
+    event_body = {
+        "id": "event-1",
+        "summary": "Team standup",
+        "start": "2026-11-06T09:00:00+01:00",
+        "end": "2026-11-06T09:30:00+01:00",
+        "start_timezone": "Europe/Berlin",
+        "end_timezone": "Europe/Berlin",
+        "status": "queued",
+    }
+    bodies: list[object] = [event_body, event_body, {"status": "queued"}]
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        return _FakeResponse(bodies.pop(0))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    event = CalendarEvent(
+        id="event-1",
+        summary="Team standup",
+        start=datetime.fromisoformat("2026-11-06T09:00:00+01:00"),
+        end=datetime.fromisoformat("2026-11-06T09:30:00+01:00"),
+        start_timezone="Europe/Berlin",
+        end_timezone="Europe/Berlin",
+    )
+
+    assert _client().create_event(event).queued is True
+    assert _client().update_event(event).queued is True
+    assert _client().delete_event("event-1") is True
+
+
+def test_confirmed_delete_is_not_queued(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        return _FakeResponse(None)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    assert _client().delete_event("event-1") is False

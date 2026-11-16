@@ -200,7 +200,7 @@ def test_create_failure_is_queued_and_not_cached(
     result = service.create_event(event)
 
     assert result.error is not None
-    assert result.error.code is ErrorCode.UPSTREAM_ERROR
+    assert result.error.code is ErrorCode.QUEUED
     assert provider.events == []
     assert _cached(repository, event.id) is None
 
@@ -284,7 +284,7 @@ def test_update_failure_keeps_the_previous_state_and_queues_a_retry(
     result = service.update_event(_event(summary="Updated standup"))
 
     assert result.error is not None
-    assert result.error.code is ErrorCode.UPSTREAM_ERROR
+    assert result.error.code is ErrorCode.QUEUED
     assert provider.events == [event]
     assert _cached(repository, event.id) == event
 
@@ -323,7 +323,7 @@ def test_delete_failure_keeps_the_event_and_queues_a_retry(
     result = service.delete_event(event.id)
 
     assert result.error is not None
-    assert result.error.code is ErrorCode.UPSTREAM_ERROR
+    assert result.error.code is ErrorCode.QUEUED
     assert provider.events == [event]
     assert _cached(repository, event.id) == event
 
@@ -431,7 +431,7 @@ def test_update_move_failure_is_queued_and_replayed(
     )
 
     assert result.error is not None
-    assert result.error.code is ErrorCode.UPSTREAM_ERROR
+    assert result.error.code is ErrorCode.QUEUED
     jobs = _jobs(retry_queue.list_due())
     assert len(jobs) == 1
     assert jobs[0].operation == UPDATE_OPERATION
@@ -944,3 +944,78 @@ def test_sync_service_rejects_a_non_positive_retry_lease(
             retry_lease=timedelta(0),
         )
 
+
+
+def test_direct_update_supersedes_an_older_queued_update(
+    service: SyncService,
+    provider: FakeCalendarProvider,
+    retry_queue: RetryQueue,
+) -> None:
+    """A backing-off update cannot overwrite a newer direct edit."""
+    _event_result(service.create_event(_event()))
+    provider.fail_next("update_event")
+    queued = service.update_event(_event(summary="old edit"))
+    assert queued.error is not None
+    assert queued.error.code is ErrorCode.QUEUED
+
+    _event_result(service.update_event(_event(summary="new edit")))
+
+    assert _jobs(retry_queue.list_due(now=datetime.now(UTC) + timedelta(days=1))) == []
+    _jobs(service.process_due_retries(now=datetime.now(UTC) + timedelta(days=1)))
+    assert provider.events[0].summary == "new edit"
+
+
+def test_direct_delete_after_a_queued_create_does_not_resurrect_the_event(
+    service: SyncService,
+    provider: FakeCalendarProvider,
+    repository: EventRepository,
+) -> None:
+    """Deleting an event whose create is still queued cancels the create."""
+    provider.fail_next("create_event")
+    queued = service.create_event(_event())
+    assert queued.error is not None
+    assert queued.error.code is ErrorCode.QUEUED
+
+    deleted = service.delete_event("event-1")
+
+    assert deleted.error is not None
+    assert deleted.error.code is ErrorCode.NOT_FOUND
+    _jobs(service.process_due_retries(now=datetime.now(UTC) + timedelta(days=1)))
+    assert provider.events == []
+    assert _cached(repository, "event-1") is None
+
+
+def test_queued_delete_supersedes_a_queued_create(
+    service: SyncService,
+    provider: FakeCalendarProvider,
+    retry_queue: RetryQueue,
+) -> None:
+    """A queued create followed by a queued delete replays only the delete."""
+    provider.fail_next("create_event")
+    service.create_event(_event())
+    provider.fail_next("delete_event")
+    service.delete_event("event-1")
+
+    jobs = _jobs(retry_queue.list_due(now=datetime.now(UTC) + timedelta(days=1)))
+    assert [job.operation for job in jobs] == [DELETE_OPERATION]
+    _jobs(service.process_due_retries(now=datetime.now(UTC) + timedelta(days=1)))
+    assert provider.events == []
+
+
+def test_retries_for_one_event_replay_in_order(
+    service: SyncService,
+    provider: FakeCalendarProvider,
+) -> None:
+    """A queued update waits for the queued create before it replays."""
+    provider.fail_next("create_event")
+    service.create_event(_event())
+    provider.fail_next("update_event")
+    service.update_event(_event(summary="edited"))
+
+    later = datetime.now(UTC) + timedelta(days=1)
+    first = _jobs(service.process_due_retries(now=later))
+    second = _jobs(service.process_due_retries(now=later))
+
+    assert [job.operation for job in first] == [CREATE_OPERATION]
+    assert [job.operation for job in second] == [UPDATE_OPERATION]
+    assert provider.events[0].summary == "edited"

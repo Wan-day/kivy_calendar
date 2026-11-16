@@ -2,8 +2,9 @@
 
 Google Calendar is the source of truth.  Every write reaches the provider first,
 and the SQLite cache is updated only after the provider confirms it.  When the
-provider is unavailable the write is queued for retry and returned as an error,
-so the client never displays an event that Google has not accepted.  The cache
+provider is unavailable the write is queued for retry and reported with the
+``QUEUED`` code, so the client can tell "saved to Google" from "accepted, will
+sync" and never shows a queued event as confirmed.  The cache
 is disposable and can be rebuilt from the provider with a full sync.
 """
 
@@ -56,8 +57,9 @@ class SyncService:
     def create_event(self, event: Event) -> Result[Event]:
         """Create ``event`` in Google first, then cache the confirmed event.
 
-        A provider failure queues the event payload for retry and returns the
-        provider error; the event is not cached until Google confirms it.
+        A transient provider failure queues the event payload for retry and
+        returns a ``QUEUED`` error; the event is not cached until Google
+        confirms it.
         """
         result = self._provider.create_event(event)
         if result.error is not None:
@@ -74,6 +76,7 @@ class SyncService:
                 "calendar provider reported success without an event",
             )
         self._cache_event(confirmed)
+        self._retry_queue.supersede_for_event(event.id)
         return result
 
     def update_event(self, event: Event) -> Result[Event]:
@@ -131,6 +134,7 @@ class SyncService:
                 "calendar provider reported success without an event",
             )
         self._cache_event(confirmed)
+        self._retry_queue.supersede_for_event(event.id)
         return result
 
     def delete_event(self, event_id: str) -> Result[None]:
@@ -143,6 +147,9 @@ class SyncService:
         calendar_id = self._cached_calendar_id(event_id)
         result = self._provider.delete_event(calendar_id, event_id)
         if result.error is not None:
+            if result.error.code is ErrorCode.NOT_FOUND:
+                # Google has no such event, so a queued create must not make it.
+                self._retry_queue.supersede_for_event(event_id)
             return self._queue_failed_write(
                 DELETE_OPERATION,
                 {
@@ -153,6 +160,7 @@ class SyncService:
             )
 
         self._repository.delete(event_id)
+        self._retry_queue.supersede_for_event(event_id)
         return result
 
     def sync_from_google(self) -> Result[int]:
@@ -401,7 +409,7 @@ class SyncService:
         payload: dict[str, Any],
         failure: Error,
     ) -> Result[T]:
-        """Queue a failed provider write and return the original failure.
+        """Queue a failed provider write and report it as ``QUEUED``.
 
         Only transient upstream failures are queued.  Permanent failures such
         as an invalid request, a missing event, or a conflict are returned
@@ -416,7 +424,7 @@ class SyncService:
                 f"{_describe_error(failure)}; retry could not be queued: "
                 f"{queued.error.message}",
             )
-        return Result.fail(failure.code, failure.message)
+        return Result.fail(ErrorCode.QUEUED, failure.message)
 
 
 def _as_operation(value: str) -> ProviderOperation | None:

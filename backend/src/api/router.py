@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Response
+from fastapi.responses import JSONResponse
 
 from api.auth import verify_api_key
 from api.deps import (
@@ -25,6 +26,15 @@ from slots.service import SlotService
 from sync.service import SyncService
 
 api_router = APIRouter()
+
+QUEUED_STATUS = "queued"
+
+
+def _queued_response(event: Event | None = None) -> JSONResponse:
+    """Build the 202 body for a write that was queued for retry."""
+    body: dict[str, object] = event.model_dump(mode="json") if event else {}
+    body["status"] = QUEUED_STATUS
+    return JSONResponse(status_code=202, content=body)
 
 
 @api_router.get("/health")
@@ -110,13 +120,19 @@ def get_event(
 def create_event(
     event: Event,
     service: SyncService = Depends(get_sync_service),
-) -> Event:
-    """Create an event in Google first, then cache it."""
+) -> Event | JSONResponse:
+    """Create an event in Google first, then cache it.
+
+    Answers 202 with ``status: "queued"`` when Google was unreachable and the
+    create was queued for retry.
+    """
     result = service.create_event(event)
     if result.is_error:
         error = result.error
         if error is None:
             raise RuntimeError("create event failed without an error")
+        if error.code is ErrorCode.QUEUED:
+            return _queued_response(event)
         raise ApiError(error_status(error), error.code, error.message)
     value = result.value
     if value is None:
@@ -133,8 +149,11 @@ def update_event(
     event_id: str,
     event: Event,
     service: SyncService = Depends(get_sync_service),
-) -> Event:
-    """Patch an upstream event and refresh the cached copy."""
+) -> Event | JSONResponse:
+    """Patch an upstream event and refresh the cached copy.
+
+    Answers 202 with ``status: "queued"`` when the update was queued for retry.
+    """
     updated = Event(
         id=event_id,
         calendar_id=event.calendar_id,
@@ -154,6 +173,8 @@ def update_event(
         error = result.error
         if error is None:
             raise RuntimeError("update event failed without an error")
+        if error.code is ErrorCode.QUEUED:
+            return _queued_response(updated)
         raise ApiError(error_status(error), error.code, error.message)
     value = result.value
     if value is None:
@@ -170,12 +191,17 @@ def delete_event(
     event_id: str,
     service: SyncService = Depends(get_sync_service),
 ) -> Response:
-    """Delete an event in Google and drop the cached copy."""
+    """Delete an event in Google and drop the cached copy.
+
+    Answers 202 with ``status: "queued"`` when the delete was queued for retry.
+    """
     result = service.delete_event(event_id)
     if result.is_error:
         error = result.error
         if error is None:
             raise RuntimeError("delete event failed without an error")
+        if error.code is ErrorCode.QUEUED:
+            return _queued_response()
         raise ApiError(error_status(error), error.code, error.message)
     return Response(status_code=204)
 

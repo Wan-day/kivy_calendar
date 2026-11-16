@@ -84,6 +84,7 @@ class MainScreen(Screen):
         self.client = client
         self.configuration_error = configuration_error
         self.events: list[CalendarEvent] = []
+        self._notice = ""
 
         self.title = wrapped_label(
             text="Kivy Calendar",
@@ -287,6 +288,11 @@ class MainScreen(Screen):
             f"Synced {synced} event" + ("" if synced == 1 else "s"),
         )
 
+    def set_notice(self, text: str) -> None:
+        """Show a one-time note, e.g. that a change is queued for sync."""
+        self._notice = text
+        self._set_status(text)
+
     def _show_events(self, events: list[CalendarEvent]) -> None:
         """Replace the event list and re-apply the current filters."""
         self.events = events
@@ -334,7 +340,11 @@ class MainScreen(Screen):
                 else "No events yet. Tap Add event to create one.",
             )
             return
-        self._set_status(f"{len(visible)} event" + ("" if len(visible) == 1 else "s"))
+        count_text = f"{len(visible)} event" + ("" if len(visible) == 1 else "s")
+        if self._notice:
+            count_text = f"{count_text}. {self._notice}"
+            self._notice = ""
+        self._set_status(count_text)
         self.event_list.clear_widgets()
         for event in reversed(visible):
             self.event_list.add_widget(EventRow(event, self.open_event))

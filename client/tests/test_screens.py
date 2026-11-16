@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -53,19 +54,22 @@ class FakeClient:
             TimeZoneOption(name="America/New_York", label="New York (UTC-05:00)"),
         ]
 
+    queued = False
+
     def create_event(self, event: Any) -> Any:
-        """Record a create and return the event unchanged."""
+        """Record a create and return the event (queued when configured)."""
         self.created.append(event)
-        return event
+        return replace(event, queued=self.queued)
 
     def update_event(self, event: Any) -> Any:
-        """Record an update and return the event unchanged."""
+        """Record an update and return the event (queued when configured)."""
         self.updated.append(event)
-        return event
+        return replace(event, queued=self.queued)
 
-    def delete_event(self, event_id: str) -> None:
+    def delete_event(self, event_id: str) -> bool:
         """Record a delete."""
         self.deleted.append(event_id)
+        return self.queued
 
     def list_events(self) -> list[Any]:
         """Return no events."""
@@ -817,3 +821,76 @@ def test_edit_form_keeps_all_day_flag() -> None:
     assert event.id == original.id
     assert event.all_day is True
     assert event.summary == "Holiday (moved)"
+
+
+def test_queued_save_returns_to_main_with_a_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 202 queued save is not an error: the form closes and a notice shows."""
+    _run_inline(monkeypatch)
+    client = FakeClient()
+    client.queued = True
+    manager, main_screen, add_event_screen = _make_screens(client)
+    manager.current = "add_event"
+    add_event_screen.open_for(None)
+    event = add_event_screen._build_event()
+    assert event is not None
+
+    add_event_screen._persist_event(client, event, editing=False)
+
+    assert manager.current == "main"
+    assert "will sync automatically" in main_screen.status_label.text
+    main_screen._show_events([event])
+    assert "will sync automatically" in main_screen.status_label.text
+    main_screen._show_events([event])
+    assert "will sync automatically" not in main_screen.status_label.text
+
+
+def test_queued_delete_returns_to_main_with_a_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _run_inline(monkeypatch)
+    client = FakeClient()
+    client.queued = True
+    manager, main_screen, add_event_screen = _make_screens(client)
+    manager.current = "add_event"
+    add_event_screen.open_for(_sample_event())
+
+    add_event_screen._delete_event(client, "event-1")
+
+    assert manager.current == "main"
+    assert "will sync automatically" in main_screen.status_label.text
+
+
+def test_new_event_keeps_one_id_across_repeated_saves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pressing Save again after a failure reuses the id, so no duplicate."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+
+    first = add_event_screen._build_event()
+    second = add_event_screen._build_event()
+
+    assert first is not None
+    assert second is not None
+    assert first.id == second.id
+
+
+def test_each_new_form_gets_a_fresh_id_and_success_resets_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _run_inline(monkeypatch)
+    client = FakeClient()
+    manager, _, add_event_screen = _make_screens(client)
+    add_event_screen.open_for(None)
+    first = add_event_screen._build_event()
+    assert first is not None
+
+    add_event_screen._persist_event(client, first, editing=False)
+    add_event_screen.open_for(None)
+    second = add_event_screen._build_event()
+
+    assert second is not None
+    assert second.id != first.id
+    assert client.created[0].id == first.id

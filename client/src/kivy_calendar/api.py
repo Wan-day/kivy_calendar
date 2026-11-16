@@ -49,6 +49,8 @@ class CalendarEvent:
     description: str | None = None
     recurrence: list[str] | None = None
     extended_properties: dict[str, str] | None = None
+    # True when the backend answered 202: accepted but still waiting to sync.
+    queued: bool = False
 
 
 @dataclass(frozen=True)
@@ -164,9 +166,13 @@ class BackendClient:
         )
         return self._event_from_payload(payload)
 
-    def delete_event(self, event_id: str) -> None:
-        """Delete an event from the backend calendar."""
-        self._request(f"/events/{quote(event_id, safe='')}", method="DELETE")
+    def delete_event(self, event_id: str) -> bool:
+        """Delete an event from the backend calendar.
+
+        Returns ``True`` when the backend only queued the delete for sync.
+        """
+        payload = self._request(f"/events/{quote(event_id, safe='')}", method="DELETE")
+        return self._is_queued(payload)
 
     def sync(self) -> int:
         """Ask the backend to rebuild its cache and return the event count."""
@@ -273,6 +279,11 @@ class BackendClient:
             pass
         return BackendError(error.code, code, message)
 
+    @staticmethod
+    def _is_queued(payload: object) -> bool:
+        """Whether a write response says the change is queued, not yet synced."""
+        return isinstance(payload, dict) and payload.get("status") == "queued"
+
     def _event_from_payload(self, payload: object) -> CalendarEvent:
         """Turn a backend event payload into a client event."""
         if not isinstance(payload, dict):
@@ -316,6 +327,7 @@ class BackendClient:
                 if isinstance(extended_properties, dict)
                 else None
             ),
+            queued=self._is_queued(payload),
         )
 
     def _calendar_from_payload(self, payload: object) -> CalendarSummary:

@@ -37,6 +37,7 @@ from kivy_calendar.screens.ui import wrapped_label
 
 ERROR_COLOR = (0.95, 0.42, 0.42, 1)
 STATUS_COLOR = (0.68, 0.68, 0.68, 1)
+QUEUED_NOTICE = "Saved. Google is unreachable, so it will sync automatically."
 
 
 def _field(caption: str, widget: Any) -> BoxLayout:
@@ -125,6 +126,9 @@ class AddEventScreen(Screen):
         self.refresh = refresh
         self.time_zone = time_zone
         self.event: CalendarEvent | None = None
+        # Id for a new event, fixed when the form opens so every Save press
+        # (e.g. after a timeout) sends the same id and cannot duplicate it.
+        self._new_event_id = ""
         self._calendars: list[CalendarSummary] = []
         self._calendar_labels: dict[str, str] = {}
         self._labels_by_calendar: dict[str, str] = {}
@@ -239,6 +243,7 @@ class AddEventScreen(Screen):
     def open_for(self, event: CalendarEvent | None) -> None:
         """Fill the form for creating a new event or editing ``event``."""
         self.event = event
+        self._new_event_id = uuid4().hex if event is None else ""
         self.calendar.text = ""
         if event is None:
             self.title_label.text = "New event"
@@ -299,23 +304,24 @@ class AddEventScreen(Screen):
         """Create or update the event off the UI thread."""
         try:
             if editing:
-                client.update_event(event)
+                saved = client.update_event(event)
             else:
-                client.create_event(event)
+                saved = client.create_event(event)
         except BackendError as error:
             message = error.message
             Clock.schedule_once(lambda *_: self._on_save_failed(message))
             return
-        Clock.schedule_once(lambda *_: self._on_saved())
+        queued = saved.queued
+        Clock.schedule_once(lambda *_: self._on_saved(queued))
 
     def _on_save_failed(self, message: str) -> None:
         """Re-enable the form and show the backend error."""
         self._set_buttons_enabled(True)
         self._set_status(f"Could not save event: {message}", error=True)
 
-    def _on_saved(self) -> None:
+    def _on_saved(self, queued: bool = False) -> None:
         """Return to the main screen and refresh the event list."""
-        self._return_to_main()
+        self._return_to_main(QUEUED_NOTICE if queued else "")
 
     def _load_time_zones(self) -> None:
         """Fetch the curated time zones for the dropdowns off the UI thread."""
@@ -619,31 +625,38 @@ class AddEventScreen(Screen):
     def _delete_event(self, client: BackendClient, event_id: str) -> None:
         """Delete the event off the UI thread and hand the result back."""
         try:
-            client.delete_event(event_id)
+            queued = client.delete_event(event_id)
         except BackendError as error:
             message = error.message
             Clock.schedule_once(lambda *_: self._on_delete_failed(message))
             return
-        Clock.schedule_once(lambda *_: self._on_deleted())
+        Clock.schedule_once(lambda *_: self._on_deleted(queued))
 
     def _on_delete_failed(self, message: str) -> None:
         """Re-enable the form and show the backend error."""
         self._set_buttons_enabled(True)
         self._set_status(f"Could not delete event: {message}", error=True)
 
-    def _on_deleted(self) -> None:
+    def _on_deleted(self, queued: bool = False) -> None:
         """Return to the main screen and refresh the event list."""
-        self._return_to_main()
+        self._return_to_main(QUEUED_NOTICE if queued else "")
 
-    def _return_to_main(self) -> None:
-        """Reset the form and show the refreshed event list."""
+    def _return_to_main(self, notice: str = "") -> None:
+        """Reset the form and show the refreshed event list.
+
+        ``notice`` is shown on the main screen, e.g. when the backend queued
+        the change instead of saving it to Google right away.
+        """
         self._set_buttons_enabled(True)
         self._set_status("")
         self.event = None
+        self._new_event_id = ""
         self._reset_form()
         manager = self.manager
         if manager is not None:
             manager.current = "main"
+            if notice:
+                manager.get_screen("main").set_notice(notice)
         self.refresh()
 
     def _build_event(self) -> CalendarEvent | None:
@@ -701,8 +714,14 @@ class AddEventScreen(Screen):
         calendar_id = self._selected_calendar_id()
         if not calendar_id and existing is not None:
             calendar_id = existing.calendar_id
+        if existing is not None:
+            event_id = existing.id
+        else:
+            if not self._new_event_id:
+                self._new_event_id = uuid4().hex
+            event_id = self._new_event_id
         return CalendarEvent(
-            id=existing.id if existing is not None else uuid4().hex,
+            id=event_id,
             summary=self.summary.text.strip() or "Untitled event",
             start=start,
             end=end,

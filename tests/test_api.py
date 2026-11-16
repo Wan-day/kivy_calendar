@@ -288,21 +288,59 @@ def test_create_event_writes_to_google_then_caches(
     assert provider.calls == [(ProviderOperation.CREATE, "event-1")]
 
 
-def test_create_event_returns_upstream_error_without_caching(
+def test_create_event_is_accepted_and_queued_when_google_fails(
     client: TestClient,
     provider: FakeCalendarProvider,
     repository: EventRepository,
+    retry_queue: RetryQueue,
 ) -> None:
-    """A provider failure maps to a structured upstream error and caches nothing."""
+    """A transient failure is queued, answered 202, and not cached."""
     provider.fail_next(ProviderOperation.CREATE, code=ErrorCode.UPSTREAM_ERROR, message="offline")
 
     response = client.post("/events", json=_event_payload(), headers=_auth_headers())
 
-    assert response.status_code == 503
-    assert _error_code(response) == "upstream_error"
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "queued"
+    assert body["id"] == "event-1"
+    assert body["summary"] == "Team standup"
     cached = repository.get("event-1")
     assert cached.error is not None
     assert cached.error.code is ErrorCode.NOT_FOUND
+    assert len(retry_queue.list_due().value or []) == 1
+
+
+def test_create_event_permanent_failure_is_still_an_error(
+    client: TestClient,
+    provider: FakeCalendarProvider,
+) -> None:
+    provider.fail_next(ProviderOperation.CREATE, code=ErrorCode.AUTH_ERROR, message="no")
+
+    response = client.post("/events", json=_event_payload(), headers=_auth_headers())
+
+    assert response.status_code == 401
+    assert _error_code(response) == "auth_error"
+
+
+def test_update_and_delete_are_accepted_and_queued_when_google_fails(
+    client: TestClient,
+    provider: FakeCalendarProvider,
+) -> None:
+    assert client.post("/events", json=_event_payload(), headers=_auth_headers()).status_code == 201
+    provider.fail_next(ProviderOperation.UPDATE, code=ErrorCode.UPSTREAM_ERROR, message="offline")
+    updated = client.patch(
+        "/events/event-1",
+        json=_event_payload("event-1", summary="Renamed"),
+        headers=_auth_headers(),
+    )
+    assert updated.status_code == 202
+    assert updated.json()["status"] == "queued"
+    assert updated.json()["summary"] == "Renamed"
+
+    provider.fail_next(ProviderOperation.DELETE, code=ErrorCode.UPSTREAM_ERROR, message="offline")
+    deleted = client.delete("/events/event-1", headers=_auth_headers())
+    assert deleted.status_code == 202
+    assert deleted.json() == {"status": "queued"}
 
 
 def test_create_and_list_return_the_calendar_id(client: TestClient) -> None:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -24,6 +26,7 @@ from google_calendar.provider import CalendarProvider
 from retry.queue import RetryQueue
 from slots.service import SlotService
 from sync.service import SyncService
+from sync.worker import start_retry_worker, stop_retry_worker
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +96,18 @@ def create_app(
     if slot_service is None:
         slot_service = SlotService(provider=provider)
 
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        worker = start_retry_worker(
+            _app.state.sync_service,
+            _app.state.settings.retry_interval_seconds,
+        )
+        try:
+            yield
+        finally:
+            await stop_retry_worker(worker)
+
+    app = FastAPI(title="Kivy Calendar Backend", lifespan=lifespan)
     app.state.settings = resolved_settings
     app.state.provider = provider
     app.state.repository = repository
