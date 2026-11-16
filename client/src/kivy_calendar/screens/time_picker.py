@@ -60,6 +60,8 @@ class DateTimeField(BoxLayout):
         self.choices: list[str] = []
         # The entry of the open list matching the current time, if any.
         self.selected_choice = ""
+        # Called with the previous ``text`` after the user picks a time.
+        self.on_time_picked: Callable[[str], None] | None = None
 
     @property
     def text(self) -> str:
@@ -121,9 +123,12 @@ class DateTimeField(BoxLayout):
 
     def select_time(self, value: str) -> None:
         """Set the time from a ``HH:MM`` choice."""
+        previous = self.text
         self.choices = []
         self.selected_choice = ""
         self._set_time(value)
+        if self.on_time_picked is not None and self.text != previous:
+            self.on_time_picked(previous)
 
     def dismiss_picker(self) -> None:
         """Close any open hour or minute list."""

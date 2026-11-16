@@ -146,6 +146,7 @@ class AddEventScreen(Screen):
         )
         self.start = DateTimeField()
         self.end = DateTimeField()
+        self.start.on_time_picked = self._keep_duration_after_start_pick
         self.start_timezone = _time_zone_spinner(self.time_zone)
         self.end_timezone = _time_zone_spinner(self.time_zone)
         self.description = _input("Optional notes", height=88, multiline=True)
@@ -496,6 +497,24 @@ class AddEventScreen(Screen):
         if difference <= timedelta(0):
             return 60
         return max(1, int(difference.total_seconds() // 60))
+
+    def _keep_duration_after_start_pick(self, previous_start: str) -> None:
+        """Move the end with a newly picked start so the duration stays put."""
+        start_zone = self._resolved_time_zone(self.start_timezone.text)
+        end_zone = self._resolved_time_zone(self.end_timezone.text)
+        try:
+            new_start = localize_wall_clock(self.start.text, start_zone)
+        except (TypeError, ValueError, ZoneInfoNotFoundError):
+            return
+        try:
+            duration = localize_wall_clock(
+                self.end.text, end_zone
+            ) - localize_wall_clock(previous_start, start_zone)
+        except (TypeError, ValueError, ZoneInfoNotFoundError):
+            duration = timedelta(hours=1)
+        if duration <= timedelta(0):
+            duration = timedelta(hours=1)
+        self.end.text = self._wall_clock(new_start + duration, end_zone)
 
     def _find_free_slots(
         self,

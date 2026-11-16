@@ -987,6 +987,56 @@ def test_editing_keeps_a_time_that_is_not_on_a_five_minute_step() -> None:
     assert built.start == event.start
 
 
+def test_picking_a_start_time_moves_the_end_and_keeps_the_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 90-minute event moved to 14:25 now ends at 15:55."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T01:00"
+    add_event_screen.end.text = "2026-11-09T02:30"
+
+    add_event_screen.start.select_hour(14)
+    add_event_screen.start.select_time("14:25")
+
+    assert add_event_screen.end.text == "2026-11-09T15:55"
+    event = add_event_screen._build_event()
+    assert event is not None
+    assert event.end - event.start == timedelta(minutes=90)
+
+
+def test_picking_a_start_time_after_an_invalid_end_uses_one_hour(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without a usable duration the end falls one hour after the start."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+    add_event_screen.end.text = "2026-11-09T14:00"
+
+    add_event_screen.start.select_time("16:10")
+
+    assert add_event_screen.end.text == "2026-11-09T17:10"
+
+
+def test_picking_an_end_time_leaves_the_start_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the start drives the end; changing the end never moves the start."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+    add_event_screen.end.text = "2026-11-09T16:00"
+
+    add_event_screen.end.select_time("17:30")
+
+    assert add_event_screen.start.text == "2026-11-09T15:00"
+    assert add_event_screen.end.text == "2026-11-09T17:30"
+
+
 def test_time_lists_open_at_the_current_hour_and_minute(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
