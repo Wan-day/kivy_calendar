@@ -1054,3 +1054,68 @@ def test_time_lists_open_at_the_current_hour_and_minute(
 
     field.select_hour(9)
     assert field.selected_choice == ""
+
+
+def test_typing_a_new_start_date_moves_the_end_date() -> None:
+    """Typing 2026-11-12 as the start date keeps 15:00-16:30 on that day."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+    add_event_screen.end.text = "2026-11-09T16:30"
+
+    add_event_screen.start.date_input.text = "2026-11-12"
+
+    assert add_event_screen.start.text == "2026-11-12T15:00"
+    assert add_event_screen.end.text == "2026-11-12T16:30"
+
+
+def test_an_overnight_event_keeps_its_length_when_the_date_changes() -> None:
+    """22:00 to 01:00 next day still ends the morning after the new date."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T22:00"
+    add_event_screen.end.text = "2026-11-10T01:00"
+
+    add_event_screen.start.date_input.text = "2026-11-15"
+
+    assert add_event_screen.end.text == "2026-11-16T01:00"
+
+
+def test_a_half_typed_start_date_does_not_move_the_end() -> None:
+    """The end only follows once the typed start date is complete."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+    add_event_screen.end.text = "2026-11-09T16:00"
+
+    add_event_screen.start.date_input.text = "2026-11-1"
+    assert add_event_screen.end.text == "2026-11-09T16:00"
+    add_event_screen.start.date_input.text = "2026-11-31"
+    assert add_event_screen.end.text == "2026-11-09T16:00"
+
+    add_event_screen.start.date_input.text = "2026-11-14"
+    assert add_event_screen.end.text == "2026-11-14T16:00"
+
+
+def test_an_all_day_end_date_moves_by_as_many_days_as_the_start() -> None:
+    """A three-day all-day event moved to the 20th ends on the 22nd."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.all_day.active = True
+    add_event_screen.start.text = "2026-11-09"
+    add_event_screen.end.text = "2026-11-11"
+
+    add_event_screen.start.date_input.text = "2026-11-20"
+
+    assert add_event_screen.end.text == "2026-11-22"
+
+
+def test_dates_set_by_the_form_do_not_move_the_end() -> None:
+    """Filling the form (open, suggest, defaults) never shifts the end."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.end.text = "2026-11-09T16:00"
+
+    add_event_screen.start.text = "2026-12-01T10:00"
+
+    assert add_event_screen.end.text == "2026-11-09T16:00"

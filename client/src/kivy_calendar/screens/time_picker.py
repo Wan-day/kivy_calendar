@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import date
 from typing import Any
 
 from kivy.clock import Clock
@@ -60,8 +61,14 @@ class DateTimeField(BoxLayout):
         self.choices: list[str] = []
         # The entry of the open list matching the current time, if any.
         self.selected_choice = ""
-        # Called with the previous ``text`` after the user picks a time.
-        self.on_time_picked: Callable[[str], None] | None = None
+        # Called with the previous ``text`` after the user picks a time or
+        # types a complete new date; values the form sets do not trigger it.
+        self.on_user_change: Callable[[str], None] | None = None
+        # Last complete date in the input, so a typed change can be reported
+        # against it; partial dates while typing are not changes yet.
+        self._last_date = ""
+        self._setting_text = False
+        self.date_input.bind(text=self._on_date_text)
 
     @property
     def text(self) -> str:
@@ -75,8 +82,12 @@ class DateTimeField(BoxLayout):
     def text(self, value: str) -> None:
         """Split ``value`` into its date and time parts."""
         day, _, time = value.strip().partition("T")
-        self.date_input.text = day
-        self._set_time(time)
+        self._setting_text = True
+        try:
+            self._set_time(time)
+            self.date_input.text = day
+        finally:
+            self._setting_text = False
 
     @property
     def time(self) -> str:
@@ -127,8 +138,8 @@ class DateTimeField(BoxLayout):
         self.choices = []
         self.selected_choice = ""
         self._set_time(value)
-        if self.on_time_picked is not None and self.text != previous:
-            self.on_time_picked(previous)
+        if self.on_user_change is not None and self.text != previous:
+            self.on_user_change(previous)
 
     def dismiss_picker(self) -> None:
         """Close any open hour or minute list."""
@@ -184,6 +195,29 @@ class DateTimeField(BoxLayout):
             return ""
         earlier = [value for value in values if value <= current]
         return earlier[-1] if earlier else values[0]
+
+    def _on_date_text(self, _: TextInput, text: str) -> None:
+        """Report a typed date once it is a complete, different date."""
+        day = text.strip()
+        if len(day) != len("2026-11-09"):
+            return
+        try:
+            date.fromisoformat(day)
+        except ValueError:
+            return
+        previous_day = self._last_date
+        self._last_date = day
+        if (
+            self._setting_text
+            or not previous_day
+            or day == previous_day
+            or self.on_user_change is None
+        ):
+            return
+        if not self._show_time or not self._time:
+            self.on_user_change(previous_day)
+        else:
+            self.on_user_change(f"{previous_day}T{self._time}")
 
     def _set_time(self, value: str) -> None:
         """Store the time text and show it on the button."""

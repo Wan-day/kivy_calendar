@@ -146,7 +146,7 @@ class AddEventScreen(Screen):
         )
         self.start = DateTimeField()
         self.end = DateTimeField()
-        self.start.on_time_picked = self._keep_duration_after_start_pick
+        self.start.on_user_change = self._keep_duration_after_start_change
         self.start_timezone = _time_zone_spinner(self.time_zone)
         self.end_timezone = _time_zone_spinner(self.time_zone)
         self.description = _input("Optional notes", height=88, multiline=True)
@@ -498,8 +498,11 @@ class AddEventScreen(Screen):
             return 60
         return max(1, int(difference.total_seconds() // 60))
 
-    def _keep_duration_after_start_pick(self, previous_start: str) -> None:
-        """Move the end with a newly picked start so the duration stays put."""
+    def _keep_duration_after_start_change(self, previous_start: str) -> None:
+        """Move the end with a changed start so the duration stays put."""
+        if self.all_day.active:
+            self._keep_day_span_after_start_change(previous_start)
+            return
         start_zone = self._resolved_time_zone(self.start_timezone.text)
         end_zone = self._resolved_time_zone(self.end_timezone.text)
         try:
@@ -515,6 +518,22 @@ class AddEventScreen(Screen):
         if duration <= timedelta(0):
             duration = timedelta(hours=1)
         self.end.text = self._wall_clock(new_start + duration, end_zone)
+
+    def _keep_day_span_after_start_change(self, previous_start: str) -> None:
+        """Move an all-day end date by as many days as the start moved."""
+        try:
+            new_start = date.fromisoformat(self.start.text)
+        except ValueError:
+            return
+        try:
+            span = date.fromisoformat(self.end.text) - date.fromisoformat(
+                previous_start
+            )
+        except ValueError:
+            span = timedelta(0)
+        if span < timedelta(0):
+            span = timedelta(0)
+        self.end.text = (new_start + span).isoformat()
 
     def _find_free_slots(
         self,
