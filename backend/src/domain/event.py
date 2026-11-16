@@ -35,6 +35,10 @@ class Event(BaseModel):
     summary: str = ""
     description: str | None = None
     recurrence: list[str] | None = None
+    # Read-only scheduling hints filled from Google when listing events; they
+    # are not written back and not stored in the cache.
+    transparent: bool = Field(default=False)
+    calendar_read_only: bool = Field(default=False)
     extended_properties: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("id")
