@@ -193,6 +193,39 @@ class EventRepository:
 
         return self._run(operation)
 
+    def move(
+        self,
+        event_id: str,
+        from_calendar_id: str,
+        to_calendar_id: str,
+    ) -> Result[bool]:
+        """Point a cached event at the calendar Google moved it to.
+
+        If the destination calendar already caches the same id, the source copy
+        is dropped instead so the key stays unique.
+        """
+
+        def operation(connection: sqlite3.Connection) -> Result[bool]:
+            try:
+                cursor = connection.execute(
+                    "UPDATE events SET calendar_id = ? "
+                    "WHERE calendar_id = ? AND id = ?",
+                    (to_calendar_id, from_calendar_id, event_id),
+                )
+            except sqlite3.IntegrityError:
+                cursor = connection.execute(
+                    "DELETE FROM events WHERE calendar_id = ? AND id = ?",
+                    (from_calendar_id, event_id),
+                )
+            if cursor.rowcount == 0:
+                return Result.fail(
+                    ErrorCode.NOT_FOUND,
+                    f"event {event_id!r} is not cached in {from_calendar_id!r}",
+                )
+            return Result.ok(True)
+
+        return self._run(operation)
+
     def clear(self) -> Result[int]:
         """Delete every cached event and return how many were removed."""
 

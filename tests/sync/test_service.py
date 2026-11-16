@@ -1026,3 +1026,50 @@ def test_update_in_the_same_calendar_does_not_move(
     assert result.is_ok
     assert provider.move_calls == []
     assert len(_cached_all(repository)) == 2
+
+
+@pytest.mark.parametrize(
+    "code",
+    [ErrorCode.PERMISSION_DENIED, ErrorCode.UPSTREAM_ERROR],
+)
+def test_cache_follows_a_move_even_when_the_patch_fails(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+    code: ErrorCode,
+) -> None:
+    """Once Google moved the event, the cache no longer points at the old calendar."""
+    provider = _RecordingProvider()
+    service = SyncService(provider, repository, retry_queue)
+    event = _event(calendar_id="primary")
+    assert service.create_event(event).is_ok
+    provider.fail_next(ProviderOperation.UPDATE, code=code)
+
+    result = service.update_event(
+        _event(summary="Edited", calendar_id="work@example.com")
+    )
+
+    assert result.error is not None
+    assert result.error.code is code
+    cached = _cached(repository, event.id)
+    assert cached is not None
+    assert cached.calendar_id == "work@example.com"
+    assert cached.summary == "Team standup"
+
+
+def test_failed_move_leaves_the_cache_on_the_old_calendar(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A move Google rejected does not touch the cached calendar."""
+    provider = _RecordingProvider()
+    service = SyncService(provider, repository, retry_queue)
+    event = _event(calendar_id="primary")
+    assert service.create_event(event).is_ok
+    provider.fail_next(ProviderOperation.MOVE, code=ErrorCode.PERMISSION_DENIED)
+
+    result = service.update_event(_event(calendar_id="work@example.com"))
+
+    assert result.error is not None
+    cached = _cached(repository, event.id)
+    assert cached is not None
+    assert cached.calendar_id == "primary"

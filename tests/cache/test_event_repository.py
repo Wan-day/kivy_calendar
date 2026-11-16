@@ -386,3 +386,30 @@ def test_update_only_touches_its_own_calendar_copy(
 
     assert _cached(repository.get("shared", "a")).summary == "New"
     assert _cached(repository.get("shared", "b")).summary == "Team standup"
+
+
+def test_move_points_the_cached_event_at_the_new_calendar(
+    repository: EventRepository,
+) -> None:
+    """Moving a cached event changes only its calendar."""
+    assert repository.create(_event("e", calendar_id="a", summary="Kept")).is_ok
+
+    assert _deleted(repository.move("e", "a", "b")) is True
+
+    moved = _cached(repository.get("e"))
+    assert (moved.calendar_id, moved.summary) == ("b", "Kept")
+    missing = repository.move("e", "a", "c")
+    assert missing.error is not None
+    assert missing.error.code is ErrorCode.NOT_FOUND
+
+
+def test_move_into_a_calendar_that_has_the_id_drops_the_source_copy(
+    repository: EventRepository,
+) -> None:
+    """A destination that already caches the id keeps the key unique."""
+    assert repository.create(_event("e", calendar_id="a")).is_ok
+    assert repository.create(_event("e", calendar_id="b")).is_ok
+
+    assert _deleted(repository.move("e", "a", "b")) is True
+
+    assert [e.calendar_id for e in _cached_events(repository.list())] == ["b"]

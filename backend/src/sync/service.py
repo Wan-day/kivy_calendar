@@ -128,6 +128,9 @@ class SyncService:
                     _update_payload(resolved, previous_calendar),
                     moved.error,
                 )
+            # Google has moved the event; keep the cache in step even if the
+            # field patch below fails.
+            self._repository.move(resolved.id, previous_calendar, resolved.calendar_id)
 
         result = self._provider.update_event(resolved)
         if result.error is not None:
@@ -144,8 +147,6 @@ class SyncService:
                 "calendar provider reported success without an event",
             )
         self._cache_event(confirmed)
-        if previous_calendar:
-            self._repository.delete(resolved.id, previous_calendar)
         return result
 
     def delete_event(self, event_id: str, calendar_id: str = "") -> Result[None]:
@@ -297,6 +298,7 @@ class SyncService:
                     and moved.error.code is not ErrorCode.NOT_FOUND
                 ):
                     return self._record_provider_failure(job, moved.error, now=now)
+                self._repository.move(event.id, previous_calendar, event.calendar_id)
             result = self._provider.update_event(event)
 
         if result.error is not None:
@@ -308,9 +310,6 @@ class SyncService:
             return self._record_provider_failure(job, result.error, now=now)
 
         self._cache_event(result.value if result.value is not None else event)
-        previous = _previous_calendar_id_from_payload(job.payload)
-        if previous and previous != event.calendar_id:
-            self._repository.delete(event.id, previous)
         return self._retry_queue.complete(job.id, now=now)
 
     def _replay_existing_create(
