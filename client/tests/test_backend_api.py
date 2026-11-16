@@ -18,6 +18,7 @@ from kivy_calendar.api import (
     CalendarEvent,
     CalendarSummary,
     FreeSlot,
+    TimeZoneOption,
 )
 
 BASE_URL = "http://backend.test"
@@ -116,6 +117,50 @@ def test_list_calendars_rejects_a_payload_without_an_id(
 
     with pytest.raises(BackendError) as error_info:
         _client().list_calendars()
+
+    assert error_info.value.code == "invalid_response"
+
+
+def test_list_time_zones_returns_backend_zones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The client maps the /timezones payload into zone options."""
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        captured["url"] = str(request.full_url)
+        return _FakeResponse(
+            [
+                {
+                    "name": "Asia/Kolkata",
+                    "label": "Kolkata (UTC+05:30)",
+                    "utc_offset_minutes": 330,
+                }
+            ]
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    zones = _client().list_time_zones()
+
+    assert str(captured["url"]).endswith("/timezones")
+    assert zones == [TimeZoneOption(name="Asia/Kolkata", label="Kolkata (UTC+05:30)")]
+
+
+def test_list_time_zones_rejects_a_zone_without_a_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed zone entry is reported as an invalid response."""
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout=0: _FakeResponse([{"label": "x"}]),
+    )
+
+    with pytest.raises(BackendError) as error_info:
+        _client().list_time_zones()
 
     assert error_info.value.code == "invalid_response"
 
@@ -430,6 +475,54 @@ def test_find_free_slots_rejects_a_malformed_response(
     assert exc_info.value.status_code == 500
     assert exc_info.value.code == "invalid_response"
 
+
+
+def test_queued_write_responses_are_accepted_not_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 202 body with status "queued" marks the result as queued."""
+    event_body = {
+        "id": "event-1",
+        "summary": "Team standup",
+        "start": "2026-11-06T09:00:00+01:00",
+        "end": "2026-11-06T09:30:00+01:00",
+        "start_timezone": "Europe/Berlin",
+        "end_timezone": "Europe/Berlin",
+        "status": "queued",
+    }
+    bodies: list[object] = [event_body, event_body, {"status": "queued"}]
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        return _FakeResponse(bodies.pop(0))
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    event = CalendarEvent(
+        id="event-1",
+        summary="Team standup",
+        start=datetime.fromisoformat("2026-11-06T09:00:00+01:00"),
+        end=datetime.fromisoformat("2026-11-06T09:30:00+01:00"),
+        start_timezone="Europe/Berlin",
+        end_timezone="Europe/Berlin",
+    )
+
+    assert _client().create_event(event).queued is True
+    assert _client().update_event(event).queued is True
+    assert _client().delete_event("event-1") is True
+
+
+def test_confirmed_delete_is_not_queued(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        return _FakeResponse(None)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    assert _client().delete_event("event-1") is False
 
 
 def test_update_and_delete_name_the_calendar_in_the_query(

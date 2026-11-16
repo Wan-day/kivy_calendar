@@ -49,6 +49,8 @@ class CalendarEvent:
     description: str | None = None
     recurrence: list[str] | None = None
     extended_properties: dict[str, str] | None = None
+    # True when the backend answered 202: accepted but still waiting to sync.
+    queued: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,14 @@ class CalendarSummary:
     id: str
     summary: str
     primary: bool = False
+
+
+@dataclass(frozen=True)
+class TimeZoneOption:
+    """A selectable IANA time zone with the backend's display label."""
+
+    name: str
+    label: str
 
 
 @dataclass(frozen=True)
@@ -116,6 +126,28 @@ class BackendClient:
             )
         return [self._calendar_from_payload(item) for item in payload]
 
+    def list_time_zones(self) -> list[TimeZoneOption]:
+        """Return the curated IANA time zones the backend offers."""
+        payload = self._request("/timezones", method="GET")
+        if not isinstance(payload, list):
+            raise BackendError(
+                500,
+                "invalid_response",
+                "backend returned an unexpected time zone list",
+            )
+        options: list[TimeZoneOption] = []
+        for item in payload:
+            name = str(item.get("name") or "") if isinstance(item, dict) else ""
+            if not name.strip():
+                raise BackendError(
+                    500,
+                    "invalid_response",
+                    "backend returned a time zone without a name",
+                )
+            label = str(item.get("label") or name)
+            options.append(TimeZoneOption(name=name, label=label))
+        return options
+
     def create_event(self, event: CalendarEvent) -> CalendarEvent:
         """Create an event in the backend calendar."""
         payload = self._request(
@@ -143,12 +175,16 @@ class BackendClient:
         )
         return self._event_from_payload(payload)
 
-    def delete_event(self, event_id: str, calendar_id: str = "") -> None:
-        """Delete an event from the backend calendar."""
-        self._request(
+    def delete_event(self, event_id: str, calendar_id: str = "") -> bool:
+        """Delete an event from the backend calendar.
+
+        Returns ``True`` when the backend only queued the delete for sync.
+        """
+        payload = self._request(
             f"/events/{quote(event_id, safe='')}{_calendar_query(calendar_id)}",
             method="DELETE",
         )
+        return self._is_queued(payload)
 
     def sync(self) -> int:
         """Ask the backend to rebuild its cache and return the event count."""
@@ -255,6 +291,11 @@ class BackendClient:
             pass
         return BackendError(error.code, code, message)
 
+    @staticmethod
+    def _is_queued(payload: object) -> bool:
+        """Whether a write response says the change is queued, not yet synced."""
+        return isinstance(payload, dict) and payload.get("status") == "queued"
+
     def _event_from_payload(self, payload: object) -> CalendarEvent:
         """Turn a backend event payload into a client event."""
         if not isinstance(payload, dict):
@@ -298,6 +339,7 @@ class BackendClient:
                 if isinstance(extended_properties, dict)
                 else None
             ),
+            queued=self._is_queued(payload),
         )
 
     def _calendar_from_payload(self, payload: object) -> CalendarSummary:

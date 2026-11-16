@@ -21,6 +21,7 @@ class ErrorCode(StrEnum):
     STORAGE_ERROR = "storage_error"
     UPSTREAM_ERROR = "upstream_error"
     AUTH_ERROR = "auth_error"
+    QUEUED = "queued"
     PERMISSION_DENIED = "permission_denied"
 
 

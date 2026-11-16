@@ -25,6 +25,8 @@ from google_calendar.provider import CalendarProvider
 from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
 BERLIN = ZoneInfo("Europe/Berlin")
+WINDOW_START = datetime(2026, 11, 1, tzinfo=UTC)
+WINDOW_END = datetime(2026, 12, 1, tzinfo=UTC)
 
 
 def _event(
@@ -311,25 +313,48 @@ def test_create_event_targets_a_series_override_when_set(
     assert "id" not in call["body"]
 
 
-def test_update_event_targets_a_series_override_when_set(
+def test_update_event_patches_the_real_occurrence_instance(
     provider: GoogleCalendarProvider,
     service: Mock,
 ) -> None:
-    """An edited occurrence is saved through its series override."""
-    event = _event()
-    event.recurring_event_id = "series-1"
-    insert = service.events.return_value.insert
-    insert.return_value.execute.return_value = _resource(recurringEventId="series-1")
+    """An edited occurrence patches Google's instance id, never inserts."""
+    event = _event("series1_20261106T080000Z")
+    event.recurrence = None
+    event.recurring_event_id = "series1"
+    patch = service.events.return_value.patch
+    patch.return_value.execute.return_value = _resource(
+        "series1_20261106T080000Z", recurringEventId="series1", recurrence=None
+    )
 
-    result = provider.update_event(event)
+    first = provider.update_event(event)
+    second = provider.update_event(event)
+
+    assert first.is_ok
+    assert second.is_ok
+    service.events.return_value.insert.assert_not_called()
+    assert patch.call_count == 2
+    call = patch.call_args.kwargs
+    assert call["calendarId"] == "primary"
+    assert call["eventId"] == "series1_20261106T080000Z"
+    assert "id" not in call["body"]
+    assert "recurringEventId" not in call["body"]
+    assert "recurrence" not in call["body"]
+
+
+def test_delete_event_uses_the_real_occurrence_instance_id(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Deleting one occurrence deletes that Google instance only."""
+    delete = service.events.return_value.delete
+
+    result = provider.delete_event("", "series1_20261113T080000Z")
 
     assert result.is_ok
-    service.events.return_value.patch.assert_not_called()
-    insert.assert_called_once()
-    call = insert.call_args.kwargs
-    assert call["calendarId"] == "primary"
-    assert call["body"]["recurringEventId"] == "series-1"
-    assert "id" not in call["body"]
+    assert delete.call_args.kwargs == {
+        "calendarId": "primary",
+        "eventId": "series1_20261113T080000Z",
+    }
 
 
 def test_get_maps_the_recurring_event_id(
@@ -747,7 +772,7 @@ def test_list_follows_pagination_and_maps_all_day_events(
         {"items": [_resource("second", summary="Second", recurrence=None)]},
     ]
 
-    result = provider.list_events()
+    result = provider.list_events(WINDOW_START, WINDOW_END)
 
     assert result.is_ok
     assert result.value is not None
@@ -757,56 +782,175 @@ def test_list_follows_pagination_and_maps_all_day_events(
     assert first_call.kwargs == {
         "calendarId": "primary",
         "maxResults": 2500,
-        "singleEvents": False,
+        "singleEvents": True,
+        "timeMin": "2026-11-01T00:00:00Z",
+        "timeMax": "2026-12-01T00:00:00Z",
         "showDeleted": False,
     }
     assert second_call.kwargs["pageToken"] == "next-page"
 
 
-def test_list_expands_a_recurring_event_into_occurrences(
+def _instance(
+    series_id: str,
+    day: int,
+    *,
+    hour: int = 9,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Return a Google-expanded occurrence of a weekly Berlin series."""
+    start = f"2026-11-{day:02d}T{hour:02d}:00:00+01:00"
+    end = f"2026-11-{day:02d}T{hour:02d}:30:00+01:00"
+    instance = _resource(
+        f"{series_id}_202611{day:02d}T{hour - 1:02d}0000Z",
+        recurrence=None,
+        recurringEventId=series_id,
+        start={"dateTime": start, "timeZone": "Europe/Berlin"},
+        end={"dateTime": end, "timeZone": "Europe/Berlin"},
+        originalStartTime={"dateTime": start, "timeZone": "Europe/Berlin"},
+    )
+    instance.update(overrides)
+    return instance
+
+
+def test_list_asks_google_to_expand_and_keeps_real_instance_ids(
     provider: GoogleCalendarProvider,
     service: Mock,
 ) -> None:
-    """A recurring series becomes one event per occurrence."""
+    """Occurrences keep Google's ids and point back at their series."""
     service.calendarList.return_value.list.return_value.execute.return_value = (
         _primary_calendar_list()
     )
-    service.events.return_value.list.return_value.execute.return_value = {
-        "items": [_resource("weekly", recurrence=["RRULE:FREQ=WEEKLY;COUNT=3"])],
+    list_request = service.events.return_value.list
+    list_request.return_value.execute.return_value = {
+        "items": [_instance("series1", 6), _instance("series1", 13)],
     }
 
-    result = provider.list_events()
+    result = provider.list_events(WINDOW_START, WINDOW_END)
 
     assert result.is_ok
     assert result.value is not None
     assert [event.id for event in result.value] == [
-        "weekly:2026-11-06T08:00:00+00:00",
-        "weekly:2026-11-13T08:00:00+00:00",
-        "weekly:2026-11-20T08:00:00+00:00",
+        "series1_20261106T080000Z",
+        "series1_20261113T080000Z",
     ]
+    assert {event.recurring_event_id for event in result.value} == {"series1"}
     assert all(event.recurrence is None for event in result.value)
-    assert result.value[0].summary == "Team standup"
-    assert result.value[0].start_timezone == "Europe/Berlin"
+    assert list_request.call_args.kwargs["singleEvents"] is True
 
 
-def test_list_keeps_the_series_when_the_rule_is_unsupported(
+def test_list_old_series_still_shows_current_occurrences(
     provider: GoogleCalendarProvider,
     service: Mock,
 ) -> None:
-    """An unexpandable rule keeps the series event instead of failing the sync."""
+    """A series that started over a year ago is windowed by Google, not by us."""
     service.calendarList.return_value.list.return_value.execute.return_value = (
         _primary_calendar_list()
     )
-    service.events.return_value.list.return_value.execute.return_value = {
-        "items": [_resource("hourly", recurrence=["RRULE:FREQ=HOURLY"])],
+    list_request = service.events.return_value.list
+    list_request.return_value.execute.return_value = {
+        "items": [
+            _instance(
+                "oldseries",
+                13,
+                originalStartTime={"dateTime": "2024-01-05T09:00:00+01:00"},
+            )
+        ],
     }
+
+    result = provider.list_events(WINDOW_START, WINDOW_END)
+
+    assert result.value is not None
+    assert [event.id for event in result.value] == ["oldseries_20261113T080000Z"]
+    assert list_request.call_args.kwargs["timeMin"] == "2026-11-01T00:00:00Z"
+
+
+def test_list_skips_cancelled_instances_and_keeps_moved_ones_once(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A cancelled occurrence is dropped; a moved one appears only at its new time."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _primary_calendar_list()
+    )
+    moved = _instance(
+        "series1",
+        20,
+        hour=15,
+        id="series1_20261120T080000Z",
+        originalStartTime={
+            "dateTime": "2026-11-20T09:00:00+01:00",
+            "timeZone": "Europe/Berlin",
+        },
+    )
+    cancelled = _instance("series1", 13, status="cancelled")
+    service.events.return_value.list.return_value.execute.return_value = {
+        "items": [_instance("series1", 6), cancelled, moved],
+    }
+
+    result = provider.list_events(WINDOW_START, WINDOW_END)
+
+    assert result.value is not None
+    assert [event.id for event in result.value] == [
+        "series1_20261106T080000Z",
+        "series1_20261120T080000Z",
+    ]
+    assert result.value[1].start.hour == 15
+
+
+def test_list_maps_transparency_and_read_only_calendars(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Free events and events on reader calendars are flagged."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item("primary"),
+            _calendar_item("holidays", accessRole="reader"),
+        )
+    )
+    service.events.return_value.list.return_value.execute.side_effect = [
+        {"items": [_resource("free1", recurrence=None, transparency="transparent")]},
+        {"items": [_all_day_resource("holiday1")]},
+    ]
+
+    result = provider.list_events(WINDOW_START, WINDOW_END)
+
+    assert result.value is not None
+    by_id = {event.id: event for event in result.value}
+    assert by_id["free1"].transparent is True
+    assert by_id["free1"].calendar_read_only is False
+    assert by_id["holiday1"].calendar_read_only is True
+    assert by_id["holiday1"].transparent is False
+
+
+def test_list_rejects_naive_window_bounds(
+    provider: GoogleCalendarProvider,
+) -> None:
+    """Window bounds must carry time zone information."""
+    result = provider.list_events(datetime(2026, 11, 1), WINDOW_END)
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.INVALID_ARGUMENT
+
+
+def test_list_defaults_to_a_sync_window_around_now(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Without bounds the provider lists a bounded window, never everything."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _primary_calendar_list()
+    )
+    list_request = service.events.return_value.list
+    list_request.return_value.execute.return_value = {}
 
     result = provider.list_events()
 
     assert result.is_ok
-    assert result.value is not None
-    assert [event.id for event in result.value] == ["hourly"]
-    assert result.value[0].recurrence == ["RRULE:FREQ=HOURLY"]
+    kwargs = list_request.call_args.kwargs
+    assert kwargs["singleEvents"] is True
+    assert "timeMin" in kwargs
+    assert "timeMax" in kwargs
 
 
 def test_list_stops_when_google_returns_no_items(

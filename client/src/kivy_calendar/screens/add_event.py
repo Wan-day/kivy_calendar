@@ -25,19 +25,19 @@ from kivy_calendar.api import (
     CalendarEvent,
     CalendarSummary,
     FreeSlot,
+    TimeZoneOption,
 )
 from kivy_calendar.formatting import (
     DEFAULT_TIME_ZONE,
-    UTC_OFFSET_LABELS,
     default_event_times,
-    time_zone_from_label,
-    time_zone_label,
-    to_input_value,
+    localize_wall_clock,
+    to_wall_clock_value,
 )
 from kivy_calendar.screens.ui import wrapped_label
 
 ERROR_COLOR = (0.95, 0.42, 0.42, 1)
 STATUS_COLOR = (0.68, 0.68, 0.68, 1)
+QUEUED_NOTICE = "Saved. Google is unreachable, so it will sync automatically."
 
 
 def _field(caption: str, widget: Any) -> BoxLayout:
@@ -100,10 +100,10 @@ def _input(
 
 
 def _time_zone_spinner(default: str) -> Spinner:
-    """Create a dropdown with one fixed UTC offset per hour."""
+    """Create a time zone dropdown; the backend fills in the choices."""
     return Spinner(
-        text=time_zone_label(default),
-        values=list(UTC_OFFSET_LABELS),
+        text=default,
+        values=[default],
         size_hint_y=None,
         height=44,
     )
@@ -126,9 +126,15 @@ class AddEventScreen(Screen):
         self.refresh = refresh
         self.time_zone = time_zone
         self.event: CalendarEvent | None = None
+        # Id for a new event, fixed when the form opens so every Save press
+        # (e.g. after a timeout) sends the same id and cannot duplicate it.
+        self._new_event_id = ""
         self._calendars: list[CalendarSummary] = []
         self._calendar_labels: dict[str, str] = {}
         self._labels_by_calendar: dict[str, str] = {}
+        self._time_zone_names: dict[str, str] = {}
+        self._time_zone_labels: dict[str, str] = {}
+        self._curated_zones: list[TimeZoneOption] = []
 
         self.summary = _input("Team standup")
         self.calendar = Spinner(
@@ -173,10 +179,10 @@ class AddEventScreen(Screen):
         form.add_widget(all_day_row)
 
         self._start_field, self._start_label = _field_with_label(
-            "Start (ISO datetime with offset)", self.start
+            "Start (local time, 2026-11-09T14:00)", self.start
         )
         self._end_field, self._end_label = _field_with_label(
-            "End (ISO datetime with offset)", self.end
+            "End (local time, 2026-11-09T16:00)", self.end
         )
         form.add_widget(self._start_field)
         form.add_widget(self._end_field)
@@ -237,6 +243,7 @@ class AddEventScreen(Screen):
     def open_for(self, event: CalendarEvent | None) -> None:
         """Fill the form for creating a new event or editing ``event``."""
         self.event = event
+        self._new_event_id = uuid4().hex if event is None else ""
         self.calendar.text = ""
         if event is None:
             self.title_label.text = "New event"
@@ -253,15 +260,17 @@ class AddEventScreen(Screen):
                     end_day = event.start.date()
                 self.end.text = end_day.isoformat()
             else:
-                self.start.text = to_input_value(event.start)
-                self.end.text = to_input_value(event.end)
-            self.start_timezone.text = time_zone_label(event.start_timezone)
-            self.end_timezone.text = time_zone_label(event.end_timezone)
+                self.start.text = self._wall_clock(event.start, event.start_timezone)
+                self.end.text = self._wall_clock(event.end, event.end_timezone)
+            self._refresh_time_zone_choices(
+                event.start_timezone, event.end_timezone
+            )
             self.description.text = event.description or ""
             self._apply_all_day_mode(event.all_day)
         self._set_buttons_enabled(True)
         self._set_status("")
         self._load_calendars()
+        self._load_time_zones()
 
     def on_enter(self, *args: Any) -> None:
         """Clear any message left over from a previous visit."""
@@ -296,26 +305,81 @@ class AddEventScreen(Screen):
         try:
             if editing:
                 current = self.event
-                client.update_event(
+                saved = client.update_event(
                     event,
                     source_calendar_id=current.calendar_id if current else "",
                 )
             else:
-                client.create_event(event)
+                saved = client.create_event(event)
         except BackendError as error:
             message = error.message
             Clock.schedule_once(lambda *_: self._on_save_failed(message))
             return
-        Clock.schedule_once(lambda *_: self._on_saved())
+        queued = saved.queued
+        Clock.schedule_once(lambda *_: self._on_saved(queued))
 
     def _on_save_failed(self, message: str) -> None:
         """Re-enable the form and show the backend error."""
         self._set_buttons_enabled(True)
         self._set_status(f"Could not save event: {message}", error=True)
 
-    def _on_saved(self) -> None:
+    def _on_saved(self, queued: bool = False) -> None:
         """Return to the main screen and refresh the event list."""
-        self._return_to_main()
+        self._return_to_main(QUEUED_NOTICE if queued else "")
+
+    def _load_time_zones(self) -> None:
+        """Fetch the curated time zones for the dropdowns off the UI thread."""
+        client = self.client
+        if client is None:
+            return
+        thread = threading.Thread(
+            target=self._fetch_time_zones,
+            args=(client,),
+            daemon=True,
+        )
+        thread.start()
+
+    def _fetch_time_zones(self, client: BackendClient) -> None:
+        """Load time zones in the background and apply them on the UI thread."""
+        try:
+            zones = client.list_time_zones()
+        except BackendError as error:
+            message = error.message
+            Clock.schedule_once(lambda *_: self._on_time_zones_failed(message))
+            return
+        Clock.schedule_once(lambda *_: self._on_time_zones_loaded(zones))
+
+    def _on_time_zones_loaded(self, zones: list[TimeZoneOption]) -> None:
+        """Offer the backend's zones, keeping the current selection."""
+        self._curated_zones = list(zones)
+        self._refresh_time_zone_choices(
+            self._resolved_time_zone(self.start_timezone.text),
+            self._resolved_time_zone(self.end_timezone.text),
+        )
+
+    def _on_time_zones_failed(self, message: str) -> None:
+        """Report that time zones could not be loaded; the current zone stays."""
+        self._set_status(f"Could not load time zones: {message}", error=True)
+
+    def _refresh_time_zone_choices(self, start_zone: str, end_zone: str) -> None:
+        """Rebuild the dropdowns and select ``start_zone`` and ``end_zone``.
+
+        The two zones are always selectable, even when the backend's curated
+        list does not contain them.
+        """
+        options = list(self._curated_zones)
+        known = {option.name for option in options}
+        for zone in (start_zone, end_zone):
+            if zone and zone not in known:
+                options.insert(0, TimeZoneOption(name=zone, label=zone))
+                known.add(zone)
+        self._time_zone_names = {option.label: option.name for option in options}
+        self._time_zone_labels = {option.name: option.label for option in options}
+        values = [option.label for option in options]
+        self.start_timezone.values = values
+        self.end_timezone.values = values
+        self.start_timezone.text = self._time_zone_labels.get(start_zone, start_zone)
+        self.end_timezone.text = self._time_zone_labels.get(end_zone, end_zone)
 
     def _load_calendars(self) -> None:
         """Fetch the writable calendars for the dropdown off the UI thread."""
@@ -419,10 +483,12 @@ class AddEventScreen(Screen):
         if self.all_day.active:
             return 24 * 60
         try:
-            start = datetime.fromisoformat(self.start.text.strip())
-            end = datetime.fromisoformat(self.end.text.strip())
-            if (start.tzinfo is None) != (end.tzinfo is None):
-                return 60
+            start = localize_wall_clock(
+                self.start.text, self._resolved_time_zone(self.start_timezone.text)
+            )
+            end = localize_wall_clock(
+                self.end.text, self._resolved_time_zone(self.end_timezone.text)
+            )
             difference = end - start
         except (TypeError, ValueError):
             return 60
@@ -464,8 +530,10 @@ class AddEventScreen(Screen):
             self._set_status("No free slot found in the next 7 days.")
             return
         slot = slots[0]
-        self.start.text = to_input_value(slot.start)
-        self.end.text = to_input_value(slot.end)
+        start_zone = self._resolved_time_zone(self.start_timezone.text)
+        end_zone = self._resolved_time_zone(self.end_timezone.text)
+        self.start.text = self._wall_clock(slot.start, start_zone)
+        self.end.text = self._wall_clock(slot.end, end_zone)
         self._set_status("Suggested a free time.")
 
     def _on_all_day_changed(self, instance: CheckBox, value: bool) -> None:
@@ -484,9 +552,7 @@ class AddEventScreen(Screen):
             self.start.text = start_day.isoformat()
             self.end.text = start_day.isoformat()
         else:
-            start, end = default_event_times()
-            self.start.text = to_input_value(start)
-            self.end.text = to_input_value(end)
+            self._fill_default_times()
 
     def _apply_all_day_mode(self, all_day: bool) -> None:
         """Update field hints and captions for the chosen event kind."""
@@ -498,8 +564,8 @@ class AddEventScreen(Screen):
         else:
             self.start.hint_text = ""
             self.end.hint_text = ""
-            self._start_label.text = "Start (ISO datetime with offset)"
-            self._end_label.text = "End (ISO datetime with offset)"
+            self._start_label.text = "Start (local time, 2026-11-09T14:00)"
+            self._end_label.text = "End (local time, 2026-11-09T16:00)"
         self.suggest_button.disabled = all_day or self.save_button.disabled
 
     def confirm_delete(self, *args: Any) -> None:
@@ -568,31 +634,38 @@ class AddEventScreen(Screen):
     ) -> None:
         """Delete the event off the UI thread and hand the result back."""
         try:
-            client.delete_event(event_id, calendar_id)
+            queued = client.delete_event(event_id, calendar_id)
         except BackendError as error:
             message = error.message
             Clock.schedule_once(lambda *_: self._on_delete_failed(message))
             return
-        Clock.schedule_once(lambda *_: self._on_deleted())
+        Clock.schedule_once(lambda *_: self._on_deleted(queued))
 
     def _on_delete_failed(self, message: str) -> None:
         """Re-enable the form and show the backend error."""
         self._set_buttons_enabled(True)
         self._set_status(f"Could not delete event: {message}", error=True)
 
-    def _on_deleted(self) -> None:
+    def _on_deleted(self, queued: bool = False) -> None:
         """Return to the main screen and refresh the event list."""
-        self._return_to_main()
+        self._return_to_main(QUEUED_NOTICE if queued else "")
 
-    def _return_to_main(self) -> None:
-        """Reset the form and show the refreshed event list."""
+    def _return_to_main(self, notice: str = "") -> None:
+        """Reset the form and show the refreshed event list.
+
+        ``notice`` is shown on the main screen, e.g. when the backend queued
+        the change instead of saving it to Google right away.
+        """
         self._set_buttons_enabled(True)
         self._set_status("")
         self.event = None
+        self._new_event_id = ""
         self._reset_form()
         manager = self.manager
         if manager is not None:
             manager.current = "main"
+            if notice:
+                manager.get_screen("main").set_notice(notice)
         self.refresh()
 
     def _build_event(self) -> CalendarEvent | None:
@@ -630,25 +703,19 @@ class AddEventScreen(Screen):
             end = end_inclusive + timedelta(days=1)
             all_day = True
         else:
-            try:
-                start = datetime.fromisoformat(self.start.text.strip())
-                end = datetime.fromisoformat(self.end.text.strip())
-            except ValueError:
-                self._set_status(
-                    "Use ISO times such as 2026-11-09T14:00+01:00.",
-                    error=True,
-                )
-                return None
-            if start.tzinfo is None or end.tzinfo is None:
-                self._set_status(
-                    "Start and end must include a UTC offset or zone.",
-                    error=True,
-                )
-                return None
             for time_zone in (start_timezone, end_timezone):
                 if not self._is_known_time_zone(time_zone):
                     self._set_status(f"Unknown time zone: {time_zone}", error=True)
                     return None
+            try:
+                start = localize_wall_clock(self.start.text, start_timezone)
+                end = localize_wall_clock(self.end.text, end_timezone)
+            except ValueError as error:
+                self._set_status(
+                    f"Use local times such as 2026-11-09T14:00 ({error}).",
+                    error=True,
+                )
+                return None
             if end <= start:
                 self._set_status("End must be after start.", error=True)
                 return None
@@ -656,8 +723,14 @@ class AddEventScreen(Screen):
         calendar_id = self._selected_calendar_id()
         if not calendar_id and existing is not None:
             calendar_id = existing.calendar_id
+        if existing is not None:
+            event_id = existing.id
+        else:
+            if not self._new_event_id:
+                self._new_event_id = uuid4().hex
+            event_id = self._new_event_id
         return CalendarEvent(
-            id=existing.id if existing is not None else uuid4().hex,
+            id=event_id,
             summary=self.summary.text.strip() or "Untitled event",
             start=start,
             end=end,
@@ -677,10 +750,28 @@ class AddEventScreen(Screen):
             ),
         )
 
+    def _fill_default_times(self) -> None:
+        """Prefill the next full hour as wall-clock time in the default zone."""
+        try:
+            now = datetime.now(ZoneInfo(self.time_zone))
+        except (ValueError, ZoneInfoNotFoundError):
+            now = None
+        start, end = default_event_times(now)
+        self.start.text = self._wall_clock(start, self.time_zone)
+        self.end.text = self._wall_clock(end, self.time_zone)
+
+    @staticmethod
+    def _wall_clock(value: datetime, zone: str) -> str:
+        """Return ``value`` as wall-clock text in ``zone``."""
+        try:
+            return to_wall_clock_value(value, zone)
+        except (ValueError, ZoneInfoNotFoundError):
+            return value.replace(tzinfo=None).isoformat(timespec="minutes")
+
     def _resolved_time_zone(self, raw: str) -> str:
         """Return the IANA zone for a dropdown label or a zone name."""
         text = raw.strip()
-        return time_zone_from_label(text) or text or self.time_zone
+        return self._time_zone_names.get(text) or text or self.time_zone
 
     @staticmethod
     def _is_known_time_zone(name: str) -> bool:
@@ -694,13 +785,10 @@ class AddEventScreen(Screen):
     def _reset_form(self) -> None:
         """Clear the form and prefill a fresh time window and time zone."""
         self.all_day.active = False
-        start, end = default_event_times()
         self.summary.text = ""
         self.description.text = ""
-        self.start.text = to_input_value(start)
-        self.end.text = to_input_value(end)
-        self.start_timezone.text = time_zone_label(self.time_zone)
-        self.end_timezone.text = time_zone_label(self.time_zone)
+        self._fill_default_times()
+        self._refresh_time_zone_choices(self.time_zone, self.time_zone)
         self._apply_all_day_mode(False)
 
     def _set_buttons_enabled(self, enabled: bool) -> None:

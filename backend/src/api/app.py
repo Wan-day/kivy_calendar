@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 
 from api.auth import verify_api_key  # noqa: F401 - registered on routes
 from api.deps import (  # noqa: F401 - used by route dependencies
@@ -14,7 +15,7 @@ from api.deps import (  # noqa: F401 - used by route dependencies
     get_retry_queue,
     get_sync_service,
 )
-from api.errors import ApiError
+from api.errors import ApiError, api_error_handler
 from api.router import api_router
 from api.unavailable_provider import UnavailableCalendarProvider
 from cache.repository import EventRepository
@@ -25,6 +26,7 @@ from google_calendar.provider import CalendarProvider
 from retry.queue import RetryQueue
 from slots.service import SlotService
 from sync.service import SyncService
+from sync.worker import start_retry_worker, stop_retry_worker
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +74,12 @@ def create_app(
     explicit arguments.
     """
     resolved_settings = settings or get_settings()
-    app = FastAPI(title="Kivy Calendar Backend")
+    app = FastAPI(
+        title="Kivy Calendar Backend",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
 
     if provider is None:
         provider = _build_default_provider(resolved_settings)
@@ -89,6 +96,18 @@ def create_app(
     if slot_service is None:
         slot_service = SlotService(provider=provider)
 
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        worker = start_retry_worker(
+            _app.state.sync_service,
+            _app.state.settings.retry_interval_seconds,
+        )
+        try:
+            yield
+        finally:
+            await stop_retry_worker(worker)
+
+    app = FastAPI(title="Kivy Calendar Backend", lifespan=lifespan)
     app.state.settings = resolved_settings
     app.state.provider = provider
     app.state.repository = repository
@@ -98,11 +117,6 @@ def create_app(
 
     app.include_router(api_router)
 
-    @app.exception_handler(ApiError)
-    async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={"error": {"code": exc.code.value, "message": exc.message}},
-        )
+    app.add_exception_handler(ApiError, api_error_handler)  # type: ignore[arg-type]
 
     return app
