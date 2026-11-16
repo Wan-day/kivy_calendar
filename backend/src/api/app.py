@@ -74,13 +74,6 @@ def create_app(
     explicit arguments.
     """
     resolved_settings = settings or get_settings()
-    app = FastAPI(
-        title="Kivy Calendar Backend",
-        docs_url=None,
-        redoc_url=None,
-        openapi_url=None,
-    )
-
     if provider is None:
         provider = _build_default_provider(resolved_settings)
     if repository is None:
@@ -107,7 +100,13 @@ def create_app(
         finally:
             await stop_retry_worker(worker)
 
-    app = FastAPI(title="Kivy Calendar Backend", lifespan=lifespan)
+    app = FastAPI(
+        title="Kivy Calendar Backend",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.state.settings = resolved_settings
     app.state.provider = provider
     app.state.repository = repository
