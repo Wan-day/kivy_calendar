@@ -200,7 +200,7 @@ def test_create_failure_is_queued_and_not_cached(
     result = service.create_event(event)
 
     assert result.error is not None
-    assert result.error.code is ErrorCode.UPSTREAM_ERROR
+    assert result.error.code is ErrorCode.QUEUED
     assert provider.events == []
     assert _cached(repository, event.id) is None
 
@@ -284,7 +284,7 @@ def test_update_failure_keeps_the_previous_state_and_queues_a_retry(
     result = service.update_event(_event(summary="Updated standup"))
 
     assert result.error is not None
-    assert result.error.code is ErrorCode.UPSTREAM_ERROR
+    assert result.error.code is ErrorCode.QUEUED
     assert provider.events == [event]
     assert _cached(repository, event.id) == event
 
@@ -323,7 +323,7 @@ def test_delete_failure_keeps_the_event_and_queues_a_retry(
     result = service.delete_event(event.id)
 
     assert result.error is not None
-    assert result.error.code is ErrorCode.UPSTREAM_ERROR
+    assert result.error.code is ErrorCode.QUEUED
     assert provider.events == [event]
     assert _cached(repository, event.id) == event
 
@@ -431,7 +431,7 @@ def test_update_move_failure_is_queued_and_replayed(
     )
 
     assert result.error is not None
-    assert result.error.code is ErrorCode.UPSTREAM_ERROR
+    assert result.error.code is ErrorCode.QUEUED
     jobs = _jobs(retry_queue.list_due())
     assert len(jobs) == 1
     assert jobs[0].operation == UPDATE_OPERATION

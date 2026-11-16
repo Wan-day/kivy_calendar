@@ -16,6 +16,7 @@ _ERROR_STATUS: dict[ErrorCode, int] = {
     ErrorCode.STORAGE_ERROR: 500,
     ErrorCode.UPSTREAM_ERROR: 503,
     ErrorCode.AUTH_ERROR: 401,
+    ErrorCode.QUEUED: 202,
 }
 
 
