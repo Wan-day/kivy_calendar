@@ -127,6 +127,9 @@ class AddEventScreen(Screen):
         self.refresh = refresh
         self.time_zone = time_zone
         self.event: CalendarEvent | None = None
+        # Id for a new event, fixed when the form opens so every Save press
+        # (e.g. after a timeout) sends the same id and cannot duplicate it.
+        self._new_event_id = ""
         self._calendars: list[CalendarSummary] = []
         self._calendar_labels: dict[str, str] = {}
         self._labels_by_calendar: dict[str, str] = {}
@@ -238,6 +241,7 @@ class AddEventScreen(Screen):
     def open_for(self, event: CalendarEvent | None) -> None:
         """Fill the form for creating a new event or editing ``event``."""
         self.event = event
+        self._new_event_id = uuid4().hex if event is None else ""
         self.calendar.text = ""
         if event is None:
             self.title_label.text = "New event"
@@ -586,6 +590,7 @@ class AddEventScreen(Screen):
         self._set_buttons_enabled(True)
         self._set_status("")
         self.event = None
+        self._new_event_id = ""
         self._reset_form()
         manager = self.manager
         if manager is not None:
@@ -655,8 +660,14 @@ class AddEventScreen(Screen):
         calendar_id = self._selected_calendar_id()
         if not calendar_id and existing is not None:
             calendar_id = existing.calendar_id
+        if existing is not None:
+            event_id = existing.id
+        else:
+            if not self._new_event_id:
+                self._new_event_id = uuid4().hex
+            event_id = self._new_event_id
         return CalendarEvent(
-            id=existing.id if existing is not None else uuid4().hex,
+            id=event_id,
             summary=self.summary.text.strip() or "Untitled event",
             start=start,
             end=end,

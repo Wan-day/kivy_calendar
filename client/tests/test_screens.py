@@ -720,3 +720,37 @@ def test_queued_delete_returns_to_main_with_a_notice(
 
     assert manager.current == "main"
     assert "will sync automatically" in main_screen.status_label.text
+
+
+def test_new_event_keeps_one_id_across_repeated_saves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pressing Save again after a failure reuses the id, so no duplicate."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+
+    first = add_event_screen._build_event()
+    second = add_event_screen._build_event()
+
+    assert first is not None
+    assert second is not None
+    assert first.id == second.id
+
+
+def test_each_new_form_gets_a_fresh_id_and_success_resets_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _run_inline(monkeypatch)
+    client = FakeClient()
+    manager, _, add_event_screen = _make_screens(client)
+    add_event_screen.open_for(None)
+    first = add_event_screen._build_event()
+    assert first is not None
+
+    add_event_screen._persist_event(client, first, editing=False)
+    add_event_screen.open_for(None)
+    second = add_event_screen._build_event()
+
+    assert second is not None
+    assert second.id != first.id
+    assert client.created[0].id == first.id
