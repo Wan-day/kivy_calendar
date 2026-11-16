@@ -12,6 +12,14 @@ venv/
 
 # Environment
 .env
+.env.*
+!.env.example
+
+# Credentials and tokens
+*.pem
+credentials*.json
+client_secret*.json
+token*.json
 
 # Local SQLite databases
 *.db
