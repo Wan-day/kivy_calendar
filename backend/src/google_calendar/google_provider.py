@@ -79,6 +79,7 @@ DEFAULT_CALENDAR_ID = "primary"
 MAX_RESULTS = 2500
 
 _READABLE_ACCESS_ROLES = frozenset({"owner", "writer", "reader"})
+_WRITABLE_ACCESS_ROLES = frozenset({"owner", "writer"})
 # Google names the account's own calendar after the user (often the account's
 # email address).  The app always calls it "Primary" so the dropdown never shows
 # an email address as a calendar name.
@@ -242,7 +243,10 @@ class GoogleCalendarProvider:
         )
 
     def list_calendars(self) -> Result[list[CalendarInfo]]:
-        """Return the calendars offered in the event form, primary first.
+        """Return the writable calendars offered in the event form, primary first.
+
+        Read-only (reader) calendars are still read by :meth:`list_events` but
+        are never offered as a save or move target.
 
         Calendars Google names after an email address are hidden unless they
         are the account's primary calendar or the configured default; the
@@ -257,9 +261,12 @@ class GoogleCalendarProvider:
         calendars = [
             calendar
             for calendar in entries.value or []
-            if calendar.primary
-            or calendar.id == self._calendar_id
-            or _EMAIL_PATTERN.fullmatch(calendar.summary) is None
+            if calendar.writable
+            and (
+                calendar.primary
+                or calendar.id == self._calendar_id
+                or _EMAIL_PATTERN.fullmatch(calendar.summary) is None
+            )
         ]
         calendars.sort(
             key=lambda calendar: (
@@ -807,6 +814,7 @@ def _calendar_info(item: object) -> CalendarInfo | None:
         id=calendar_id,
         summary=summary,
         primary=primary,
+        writable=item.get("accessRole") in _WRITABLE_ACCESS_ROLES,
     )
 
 

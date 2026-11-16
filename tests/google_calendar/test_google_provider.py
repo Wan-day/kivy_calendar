@@ -577,9 +577,44 @@ def test_list_calendars_maps_summaries_and_marks_the_primary(
         for calendar in result.value
     ] == [
         ("primary", "Primary", True),
-        ("reader@example.com", "Shared", False),
         ("work@example.com", "Work", False),
     ]
+
+
+def test_list_calendars_offers_only_owner_and_writer_calendars(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Read-only calendars are never offered as a save or move target."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item("own", summary="Own", accessRole="owner"),
+            _calendar_item("edit", summary="Edit", accessRole="writer"),
+            _calendar_item("read", summary="Read", accessRole="reader"),
+        )
+    )
+
+    result = provider.list_calendars()
+
+    assert result.value is not None
+    assert "read" not in [calendar.id for calendar in result.value]
+    assert {"own", "edit"} <= {calendar.id for calendar in result.value}
+    assert all("writable" not in c.model_dump() for c in result.value)
+
+
+def test_read_only_calendars_are_still_read_for_events(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Reader calendars stay in the event sync even though they are not targets."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(_calendar_item("read", accessRole="reader"))
+    )
+
+    calendars = provider._calendar_ids()
+
+    assert calendars.value is not None
+    assert "read" in calendars.value
 
 
 def test_list_calendars_hides_email_named_calendars(
