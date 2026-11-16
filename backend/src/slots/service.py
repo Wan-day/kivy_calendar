@@ -1,9 +1,17 @@
 """Free-slot search against the calendar provider.
 
 The source of truth for busy time is Google Calendar, so slot finding reads the
-provider the same way a full sync does.  Only events with a finite duration are
-considered; recurring rules that could not be expanded keep their series shape
-and are skipped here rather than guessed at.
+provider the same way a full sync does, asking only for the search window.
+Google expands recurring series, so every occurrence is an ordinary event.
+
+An event blocks time when :func:`blocks_time` says so:
+
+* events Google marks ``transparent`` ("free") never block;
+* timed events otherwise block;
+* all-day events (holidays, birthdays, "out of office" banners) block only when
+  they are opaque and sit on a writable calendar, since read-only calendars
+  are informational;
+* a series master that still carries a ``recurrence`` rule is skipped.
 """
 
 from __future__ import annotations
@@ -15,6 +23,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from core.errors import ErrorCode, Result
+from domain.event import Event
 from google_calendar.provider import CalendarProvider
 
 
@@ -35,9 +44,18 @@ class FreeSlot(BaseModel):
 
     @model_validator(mode="after")
     def _end_must_be_after_start(self) -> Self:
-        if self.end <= self.start:
+        # Compare instants: same-zone aware values compare by wall clock and
+        # ignore ``fold``, which breaks slots that end after a fall-back.
+        if self.end.astimezone(UTC) <= self.start.astimezone(UTC):
             raise ValueError("free slot end must be after start")
         return self
+
+
+def blocks_time(event: Event) -> bool:
+    """Whether ``event`` makes the time it covers unavailable."""
+    if event.recurrence is not None or event.transparent:
+        return False
+    return not (event.all_day and event.calendar_read_only)
 
 
 class SlotService:
@@ -84,7 +102,7 @@ class SlotService:
                 f"unknown IANA time zone: {time_zone!r}",
             )
 
-        listed = self._provider.list_events()
+        listed = self._provider.list_events(window_start, window_end)
         if listed.error is not None:
             return Result.fail(listed.error.code, listed.error.message)
 
@@ -99,7 +117,7 @@ class SlotService:
         window_end_utc = window_end.astimezone(UTC)
         busy: list[tuple[datetime, datetime]] = []
         for event in events:
-            if event.recurrence is not None:
+            if not blocks_time(event):
                 continue
             event_start = event.start.astimezone(UTC)
             event_end = event.end.astimezone(UTC)
@@ -127,5 +145,7 @@ class SlotService:
         zone: ZoneInfo,
     ) -> FreeSlot:
         """Return a free slot starting at ``start`` with the requested duration."""
-        slot_start = start.astimezone(zone)
-        return FreeSlot(start=slot_start, end=slot_start + duration)
+        # Add the duration to the UTC instant: arithmetic on a zone-aware value
+        # works on wall-clock time and is wrong across a DST transition.
+        end = (start.astimezone(UTC) + duration).astimezone(zone)
+        return FreeSlot(start=start.astimezone(zone), end=end)

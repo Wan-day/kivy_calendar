@@ -9,6 +9,7 @@ they never let those failures escape as exceptions across a module boundary.
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
@@ -94,6 +95,17 @@ class CalendarProvider(Protocol):
         """
         ...
 
-    def list_events(self) -> Result[list[Event]]:
-        """Return every event in the upstream calendar."""
+    def list_events(
+        self,
+        time_min: datetime | None = None,
+        time_max: datetime | None = None,
+    ) -> Result[list[Event]]:
+        """Return the events overlapping ``[time_min, time_max)``.
+
+        Recurring series are expanded by the upstream calendar, so every
+        occurrence is its own event carrying its real instance id and the
+        series id in ``recurring_event_id``.  Cancelled occurrences are not
+        returned.  Both bounds must be timezone-aware; when either is omitted
+        the implementation applies its default sync window.
+        """
         ...
