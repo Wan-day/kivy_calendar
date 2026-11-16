@@ -900,3 +900,88 @@ def test_each_new_form_gets_a_fresh_id_and_success_resets_it(
     assert second is not None
     assert second.id != first.id
     assert client.created[0].id == first.id
+
+
+def test_time_picker_offers_hours_then_five_minute_steps() -> None:
+    """The time list starts with hours and then the minutes of that hour."""
+    from kivy_calendar.screens.time_picker import hour_choices, minute_choices
+
+    assert hour_choices() == [f"{hour:02d}" for hour in range(24)]
+    assert minute_choices(9) == [
+        "09:00",
+        "09:05",
+        "09:10",
+        "09:15",
+        "09:20",
+        "09:25",
+        "09:30",
+        "09:35",
+        "09:40",
+        "09:45",
+        "09:50",
+        "09:55",
+    ]
+
+
+def test_picking_an_hour_then_minutes_sets_the_event_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Choosing 09 and then 09:35 saves 09:35 in the selected zone."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+    add_event_screen.end.text = "2026-11-09T16:00"
+
+    add_event_screen.start.open_hour_picker()
+    assert add_event_screen.start.choices == [f"{hour:02d}" for hour in range(24)]
+    add_event_screen.start.select_hour(9)
+    assert add_event_screen.start.choices[0] == "09:00"
+    assert add_event_screen.start.choices[-1] == "09:55"
+    add_event_screen.start.select_time("09:35")
+
+    assert add_event_screen.start.choices == []
+    assert add_event_screen.start.time_button.text == "09:35"
+    assert add_event_screen.start.text == "2026-11-09T09:35"
+    event = add_event_screen._build_event()
+    assert event is not None
+    assert event.start.isoformat() == "2026-11-09T09:35:00+01:00"
+
+
+def test_all_day_hides_the_time_picker_and_keeps_only_the_date() -> None:
+    """All-day events use just the date; timed events get the picker back."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+
+    add_event_screen.all_day.active = True
+
+    assert add_event_screen.start.time_button.parent is None
+    assert add_event_screen.start.text == "2026-11-09"
+
+    add_event_screen.all_day.active = False
+
+    assert add_event_screen.start.time_button.parent is add_event_screen.start
+    assert "T" in add_event_screen.start.text
+
+
+def test_editing_keeps_a_time_that_is_not_on_a_five_minute_step() -> None:
+    """An event at 14:03 keeps that time until the user picks another."""
+    from kivy_calendar.api import CalendarEvent
+
+    _, _, add_event_screen = _make_screens(FakeClient())
+    event = CalendarEvent(
+        id="evt",
+        summary="Odd start",
+        start=datetime(2026, 11, 9, 14, 3, tzinfo=BERLIN),
+        end=datetime(2026, 11, 9, 15, 0, tzinfo=BERLIN),
+        start_timezone="Europe/Berlin",
+        end_timezone="Europe/Berlin",
+    )
+
+    add_event_screen.open_for(event)
+
+    assert add_event_screen.start.time_button.text == "14:03"
+    built = add_event_screen._build_event()
+    assert built is not None
+    assert built.start == event.start
