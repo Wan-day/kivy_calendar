@@ -288,6 +288,19 @@ def test_create_event_writes_to_google_then_caches(
     assert provider.calls == [(ProviderOperation.CREATE, "event-1")]
 
 
+def test_create_event_returns_403_for_permission_errors(
+    client: TestClient,
+    provider: FakeCalendarProvider,
+) -> None:
+    """A permission failure is a permanent 403, not a retryable 503."""
+    provider.fail_next(ProviderOperation.CREATE, code=ErrorCode.PERMISSION_DENIED)
+
+    response = client.post("/events", json=_event_payload(), headers=_auth_headers())
+
+    assert response.status_code == 403
+    assert _error_code(response) == "permission_denied"
+
+
 def test_create_event_is_accepted_and_queued_when_google_fails(
     client: TestClient,
     provider: FakeCalendarProvider,
@@ -550,3 +563,25 @@ def test_free_slots_returns_upstream_error_when_provider_fails(
 
     assert response.status_code == 503
     assert _error_code(response) == "upstream_error"
+
+
+def test_shared_event_id_needs_a_calendar_to_be_read_or_deleted(
+    client: TestClient,
+    repository: EventRepository,
+) -> None:
+    """The calendar_id query picks one copy of an id cached in two calendars."""
+    for calendar in ("a", "b"):
+        payload = _event_payload("shared", calendar_id=calendar)
+        assert repository.create(Event.model_validate(payload)).is_ok
+
+    ambiguous = client.get("/events/shared", headers=_auth_headers())
+    chosen = client.get(
+        "/events/shared", params={"calendar_id": "b"}, headers=_auth_headers()
+    )
+    refused = client.delete("/events/shared", headers=_auth_headers())
+
+    assert ambiguous.status_code == 400
+    assert chosen.status_code == 200
+    assert chosen.json()["calendar_id"] == "b"
+    assert refused.status_code == 400
+    assert len(repository.list().value or []) == 2

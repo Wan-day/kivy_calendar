@@ -523,3 +523,48 @@ def test_confirmed_delete_is_not_queued(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     assert _client().delete_event("event-1") is False
+
+
+def test_update_and_delete_name_the_calendar_in_the_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shared event ids are disambiguated with the event's calendar."""
+
+    urls: list[str] = []
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        urls.append(str(request.full_url))
+        return _FakeResponse(
+            {
+                "id": "event-1",
+                "summary": "Team standup",
+                "start": "2026-11-06T10:00:00+01:00",
+                "end": "2026-11-06T10:30:00+01:00",
+                "start_timezone": "Europe/Berlin",
+                "end_timezone": "Europe/Berlin",
+            }
+            if len(urls) == 1
+            else None,
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    event = CalendarEvent(
+        id="event-1",
+        summary="Team standup",
+        start=datetime.fromisoformat("2026-11-06T10:00:00+01:00"),
+        end=datetime.fromisoformat("2026-11-06T10:30:00+01:00"),
+        start_timezone="Europe/Berlin",
+        end_timezone="Europe/Berlin",
+    )
+
+    client = _client()
+    client.update_event(event, source_calendar_id="work@example.com")
+    client.delete_event("event-1", "work@example.com")
+
+    assert urls == [
+        f"{BASE_URL}/events/event-1?source_calendar_id=work%40example.com",
+        f"{BASE_URL}/events/event-1?calendar_id=work%40example.com",
+    ]

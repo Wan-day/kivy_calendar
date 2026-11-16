@@ -304,7 +304,11 @@ class AddEventScreen(Screen):
         """Create or update the event off the UI thread."""
         try:
             if editing:
-                saved = client.update_event(event)
+                current = self.event
+                saved = client.update_event(
+                    event,
+                    source_calendar_id=current.calendar_id if current else "",
+                )
             else:
                 saved = client.create_event(event)
         except BackendError as error:
@@ -617,15 +621,20 @@ class AddEventScreen(Screen):
         self._set_status("Deleting event…")
         thread = threading.Thread(
             target=self._delete_event,
-            args=(client, event.id),
+            args=(client, event.id, event.calendar_id),
             daemon=True,
         )
         thread.start()
 
-    def _delete_event(self, client: BackendClient, event_id: str) -> None:
+    def _delete_event(
+        self,
+        client: BackendClient,
+        event_id: str,
+        calendar_id: str = "",
+    ) -> None:
         """Delete the event off the UI thread and hand the result back."""
         try:
-            queued = client.delete_event(event_id)
+            queued = client.delete_event(event_id, calendar_id)
         except BackendError as error:
             message = error.message
             Clock.schedule_once(lambda *_: self._on_delete_failed(message))

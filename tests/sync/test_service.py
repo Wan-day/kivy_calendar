@@ -1019,3 +1019,137 @@ def test_retries_for_one_event_replay_in_order(
     assert [job.operation for job in first] == [CREATE_OPERATION]
     assert [job.operation for job in second] == [UPDATE_OPERATION]
     assert provider.events[0].summary == "edited"
+
+
+def _seed_shared_event(repository: EventRepository) -> None:
+    """Cache one event id in two calendars, as Google does for shared events."""
+    assert repository.create(_event("shared", calendar_id="a")).is_ok
+    assert repository.create(_event("shared", calendar_id="b")).is_ok
+
+
+def test_delete_targets_the_requested_calendar_copy(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """Deleting a shared id removes only the chosen calendar's copy."""
+    provider = _RecordingProvider()
+    assert provider.create_event(_event("shared", calendar_id="b")).is_ok
+    _seed_shared_event(repository)
+    service = SyncService(provider, repository, retry_queue)
+
+    result = service.delete_event("shared", "b")
+
+    assert result.is_ok
+    assert provider.delete_calls == [("b", "shared")]
+    assert repository.get("shared", "b").error is not None
+    assert repository.get("shared", "a").is_ok
+
+
+def test_delete_of_an_ambiguous_id_is_rejected_without_calling_google(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A bare shared id is never deleted from a guessed calendar."""
+    provider = _RecordingProvider()
+    _seed_shared_event(repository)
+    service = SyncService(provider, repository, retry_queue)
+
+    result = service.delete_event("shared")
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.INVALID_ARGUMENT
+    assert provider.delete_calls == []
+    assert _jobs(retry_queue.list_due()) == []
+    assert len(_cached_all(repository)) == 2
+
+
+def _cached_all(repository: EventRepository) -> list[Event]:
+    result = repository.list()
+    assert result.value is not None
+    return result.value
+
+
+def test_update_moves_from_the_named_source_calendar(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A shared id is moved out of the calendar the caller names."""
+    provider = _RecordingProvider()
+    assert provider.create_event(_event("shared", calendar_id="a")).is_ok
+    _seed_shared_event(repository)
+    service = SyncService(provider, repository, retry_queue)
+
+    result = service.update_event(_event("shared", calendar_id="c"), "a")
+
+    assert result.is_ok
+    assert provider.move_calls == [("a", "shared", "c")]
+    assert sorted(e.calendar_id for e in _cached_all(repository)) == ["b", "c"]
+
+
+def test_update_in_the_same_calendar_does_not_move(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """Re-saving an event in its own calendar never calls move."""
+    provider = _RecordingProvider()
+    assert provider.create_event(_event("shared", calendar_id="a")).is_ok
+    _seed_shared_event(repository)
+    service = SyncService(provider, repository, retry_queue)
+
+    result = service.update_event(_event("shared", summary="Edited", calendar_id="a"))
+
+    assert result.is_ok
+    assert provider.move_calls == []
+    assert len(_cached_all(repository)) == 2
+
+
+@pytest.mark.parametrize(
+    ("code", "reported"),
+    [
+        (ErrorCode.PERMISSION_DENIED, ErrorCode.PERMISSION_DENIED),
+        # Transient failures are queued for retry and reported as QUEUED.
+        (ErrorCode.UPSTREAM_ERROR, ErrorCode.QUEUED),
+    ],
+)
+def test_cache_follows_a_move_even_when_the_patch_fails(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+    code: ErrorCode,
+    reported: ErrorCode,
+) -> None:
+    """Once Google moved the event, the cache no longer points at the old calendar."""
+    provider = _RecordingProvider()
+    service = SyncService(provider, repository, retry_queue)
+    event = _event(calendar_id="primary")
+    assert service.create_event(event).is_ok
+    provider.fail_next(ProviderOperation.UPDATE, code=code)
+
+    result = service.update_event(
+        _event(summary="Edited", calendar_id="work@example.com")
+    )
+
+    assert result.error is not None
+    assert result.error.code is reported
+    cached = _cached(repository, event.id)
+    assert cached is not None
+    assert cached.calendar_id == "work@example.com"
+    assert cached.summary == "Team standup"
+
+
+def test_failed_move_leaves_the_cache_on_the_old_calendar(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """A move Google rejected does not touch the cached calendar."""
+    provider = _RecordingProvider()
+    service = SyncService(provider, repository, retry_queue)
+    event = _event(calendar_id="primary")
+    assert service.create_event(event).is_ok
+    provider.fail_next(ProviderOperation.MOVE, code=ErrorCode.PERMISSION_DENIED)
+
+    result = service.update_event(_event(calendar_id="work@example.com"))
+
+    assert result.error is not None
+    cached = _cached(repository, event.id)
+    assert cached is not None
+    assert cached.calendar_id == "primary"

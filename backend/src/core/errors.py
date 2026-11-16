@@ -22,6 +22,7 @@ class ErrorCode(StrEnum):
     UPSTREAM_ERROR = "upstream_error"
     AUTH_ERROR = "auth_error"
     QUEUED = "queued"
+    PERMISSION_DENIED = "permission_denied"
 
 
 @dataclass(frozen=True, slots=True)

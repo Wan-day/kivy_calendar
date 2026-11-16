@@ -157,21 +157,33 @@ class BackendClient:
         )
         return self._event_from_payload(payload)
 
-    def update_event(self, event: CalendarEvent) -> CalendarEvent:
-        """Update an existing event in the backend calendar."""
+    def update_event(
+        self,
+        event: CalendarEvent,
+        source_calendar_id: str = "",
+    ) -> CalendarEvent:
+        """Update an existing event in the backend calendar.
+
+        ``source_calendar_id`` is the calendar the event is in now, so an id
+        shared by several calendars edits the right copy.
+        """
+        query = _calendar_query(source_calendar_id, "source_calendar_id")
         payload = self._request(
-            f"/events/{quote(event.id, safe='')}",
+            f"/events/{quote(event.id, safe='')}{query}",
             method="PATCH",
             body=self._event_payload(event),
         )
         return self._event_from_payload(payload)
 
-    def delete_event(self, event_id: str) -> bool:
+    def delete_event(self, event_id: str, calendar_id: str = "") -> bool:
         """Delete an event from the backend calendar.
 
         Returns ``True`` when the backend only queued the delete for sync.
         """
-        payload = self._request(f"/events/{quote(event_id, safe='')}", method="DELETE")
+        payload = self._request(
+            f"/events/{quote(event_id, safe='')}{_calendar_query(calendar_id)}",
+            method="DELETE",
+        )
         return self._is_queued(payload)
 
     def sync(self) -> int:
@@ -406,3 +418,8 @@ class BackendClient:
             "recurrence": event.recurrence,
             "extended_properties": event.extended_properties or {},
         }
+
+
+def _calendar_query(calendar_id: str, name: str = "calendar_id") -> str:
+    """Return a query string naming the calendar, or blank when unknown."""
+    return f"?{name}={quote(calendar_id, safe='')}" if calendar_id else ""

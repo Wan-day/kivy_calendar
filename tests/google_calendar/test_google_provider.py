@@ -13,7 +13,7 @@ from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import pytest
-from core.errors import ErrorCode, Result
+from core.errors import ErrorCode, Result, is_retryable
 from domain.event import Event
 from google.auth.exceptions import RefreshError
 from google_calendar import google_provider
@@ -124,8 +124,11 @@ class _Response:
         self.reason = reason
 
 
-def _http_error(status: int) -> HttpError:
-    content = json.dumps({"error": {"message": f"HTTP {status}"}}).encode()
+def _http_error(status: int, reason: str | None = None) -> HttpError:
+    body: dict[str, Any] = {"message": f"HTTP {status}"}
+    if reason is not None:
+        body["errors"] = [{"reason": reason, "message": f"HTTP {status}"}]
+    content = json.dumps({"error": body}).encode()
     return HttpError(_Response(status), content, uri="https://example.test")
 
 
@@ -602,9 +605,44 @@ def test_list_calendars_maps_summaries_and_marks_the_primary(
         for calendar in result.value
     ] == [
         ("primary", "Primary", True),
-        ("reader@example.com", "Shared", False),
         ("work@example.com", "Work", False),
     ]
+
+
+def test_list_calendars_offers_only_owner_and_writer_calendars(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Read-only calendars are never offered as a save or move target."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item("own", summary="Own", accessRole="owner"),
+            _calendar_item("edit", summary="Edit", accessRole="writer"),
+            _calendar_item("read", summary="Read", accessRole="reader"),
+        )
+    )
+
+    result = provider.list_calendars()
+
+    assert result.value is not None
+    assert "read" not in [calendar.id for calendar in result.value]
+    assert {"own", "edit"} <= {calendar.id for calendar in result.value}
+    assert all("writable" not in c.model_dump() for c in result.value)
+
+
+def test_read_only_calendars_are_still_read_for_events(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Reader calendars stay in the event sync even though they are not targets."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(_calendar_item("read", accessRole="reader"))
+    )
+
+    calendars = provider._calendar_ids()
+
+    assert calendars.value is not None
+    assert "read" in calendars.value
 
 
 def test_list_calendars_hides_email_named_calendars(
@@ -1072,11 +1110,11 @@ def test_calendar_list_refresh_failure_is_actionable(
     assert "python -m google_calendar.auth" in result.error.message
 
 
-def test_list_deduplicates_the_same_event_across_calendars(
+def test_list_keeps_the_same_event_id_in_each_calendar(
     provider: GoogleCalendarProvider,
     service: Mock,
 ) -> None:
-    """An event visible through two calendars is returned only once."""
+    """An event visible through two calendars is kept once per calendar."""
     service.calendarList.return_value.list.return_value.execute.return_value = (
         _calendar_list(
             _calendar_item("primary"),
@@ -1098,12 +1136,42 @@ def test_list_deduplicates_the_same_event_across_calendars(
 
     assert result.is_ok
     assert result.value is not None
-    assert [event.id for event in result.value] == [
-        "shared-event",
-        "other-event",
+    assert [(event.calendar_id, event.id) for event in result.value] == [
+        ("primary", "shared-event"),
+        ("work@example.com", "shared-event"),
+        ("work@example.com", "other-event"),
     ]
-    assert result.value[0].calendar_id == "primary"
     assert result.value[0].summary == "Team standup"
+    assert result.value[1].summary == "Same event elsewhere"
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "expected"),
+    [
+        (403, "rateLimitExceeded", ErrorCode.UPSTREAM_ERROR),
+        (403, "userRateLimitExceeded", ErrorCode.UPSTREAM_ERROR),
+        (403, "forbidden", ErrorCode.PERMISSION_DENIED),
+        (403, "insufficientPermissions", ErrorCode.PERMISSION_DENIED),
+        (403, None, ErrorCode.PERMISSION_DENIED),
+    ],
+)
+def test_http_403_separates_rate_limits_from_permission_errors(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+    status: int,
+    reason: str | None,
+    expected: ErrorCode,
+) -> None:
+    """Only throttling 403s are retryable; permission 403s are permanent."""
+    service.events.return_value.insert.return_value.execute.side_effect = (
+        _http_error(status, reason)
+    )
+
+    result = provider.create_event(_event())
+
+    assert result.error is not None
+    assert result.error.code is expected
+    assert is_retryable(result.error) is (expected is ErrorCode.UPSTREAM_ERROR)
 
 
 @pytest.mark.parametrize(
@@ -1369,3 +1437,74 @@ def test_list_maps_multi_day_all_day_event(
     assert event.all_day is True
     assert event.start.date().isoformat() == "2026-11-06"
     assert event.end.date().isoformat() == "2026-11-10"
+
+
+def _primary_email_service(service: Mock) -> None:
+    """Make Google report the primary calendar under its email id."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item("me@example.com", summary="me@example.com", primary=True)
+        )
+    )
+    service.calendarList.return_value.get.return_value.execute.return_value = {
+        "id": "me@example.com"
+    }
+
+
+def test_primary_alias_is_resolved_to_the_real_id_for_listing(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Listed events carry the same id the calendar dropdown offers."""
+    _primary_email_service(service)
+    service.events.return_value.list.return_value.execute.return_value = {
+        "items": [_resource("event1", recurrence=None)]
+    }
+
+    events = provider.list_events()
+    calendars = provider.list_calendars()
+
+    assert events.value is not None
+    assert {event.calendar_id for event in events.value} == {"me@example.com"}
+    assert calendars.value is not None
+    assert [calendar.id for calendar in calendars.value] == ["me@example.com"]
+    called = [
+        call.kwargs["calendarId"]
+        for call in service.events.return_value.list.call_args_list
+    ]
+    assert called == ["me@example.com"]
+
+
+def test_primary_alias_is_resolved_once_for_writes(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A blank calendar id writes to the real primary id, looked up once."""
+    _primary_email_service(service)
+    insert = service.events.return_value.insert
+    insert.return_value.execute.return_value = _resource()
+
+    first = provider.create_event(_event())
+    provider.create_event(_event())
+
+    assert first.value is not None
+    assert first.value.calendar_id == "me@example.com"
+    assert insert.call_args.kwargs["calendarId"] == "me@example.com"
+    service.calendarList.return_value.get.assert_called_once()
+
+
+def test_primary_alias_falls_back_when_the_lookup_fails(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A failed lookup keeps using the alias instead of failing the write."""
+    service.calendarList.return_value.get.return_value.execute.side_effect = (
+        _http_error(403)
+    )
+    insert = service.events.return_value.insert
+    insert.return_value.execute.return_value = _resource()
+
+    result = provider.create_event(_event())
+
+    assert result.is_ok
+    assert insert.call_args.kwargs["calendarId"] == "primary"

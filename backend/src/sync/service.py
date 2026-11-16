@@ -79,17 +79,30 @@ class SyncService:
         self._retry_queue.supersede_for_event(event.id)
         return result
 
-    def update_event(self, event: Event) -> Result[Event]:
+    def update_event(
+        self,
+        event: Event,
+        source_calendar_id: str = "",
+    ) -> Result[Event]:
         """Update ``event`` in Google first, then refresh the cached copy.
 
         A blank ``calendar_id`` is filled from the cached event so an edit
-        targets the calendar the event came from.  When the edit moves the
+        targets the calendar the event came from.  ``source_calendar_id`` names
+        the calendar the event is cached in when an id exists in several.
+        When the edit moves the
         event, the provider's move operation runs before the field patch; the
         move is replayed with the queued update if either call fails.  If the
         cache lookup fails the provider falls back to its configured default
         calendar.
         """
-        cached_calendar = self._cached_calendar_id(event.id)
+        located = self._cached_calendar_id(
+            event.id,
+            source_calendar_id,
+            event.calendar_id,
+        )
+        if located.error is not None:
+            return Result.fail(located.error.code, located.error.message)
+        cached_calendar = located.value or ""
         resolved = event
         if not event.calendar_id:
             resolved = event.model_copy(update={"calendar_id": cached_calendar})
@@ -118,6 +131,9 @@ class SyncService:
                     _update_payload(resolved, previous_calendar),
                     moved.error,
                 )
+            # Google has moved the event; keep the cache in step even if the
+            # field patch below fails.
+            self._repository.move(resolved.id, previous_calendar, resolved.calendar_id)
 
         result = self._provider.update_event(resolved)
         if result.error is not None:
@@ -137,14 +153,18 @@ class SyncService:
         self._retry_queue.supersede_for_event(event.id)
         return result
 
-    def delete_event(self, event_id: str) -> Result[None]:
+    def delete_event(self, event_id: str, calendar_id: str = "") -> Result[None]:
         """Delete ``event_id`` in Google first, then drop the cached copy.
 
         The calendar is taken from the cached event so a delete targets the
-        calendar the event came from.  A missing cache entry falls back to the
-        provider's configured default calendar.
+        calendar the event came from (``calendar_id`` picks one when the id is
+        cached in several).  A missing cache entry falls back to the provider's
+        configured default calendar.
         """
-        calendar_id = self._cached_calendar_id(event_id)
+        located = self._cached_calendar_id(event_id, calendar_id)
+        if located.error is not None:
+            return Result.fail(located.error.code, located.error.message)
+        calendar_id = located.value or ""
         result = self._provider.delete_event(calendar_id, event_id)
         if result.error is not None:
             if result.error.code is ErrorCode.NOT_FOUND:
@@ -159,7 +179,7 @@ class SyncService:
                 result.error,
             )
 
-        self._repository.delete(event_id)
+        self._repository.delete(event_id, calendar_id or None)
         self._retry_queue.supersede_for_event(event_id)
         return result
 
@@ -286,6 +306,7 @@ class SyncService:
                     and moved.error.code is not ErrorCode.NOT_FOUND
                 ):
                     return self._record_provider_failure(job, moved.error, now=now)
+                self._repository.move(event.id, previous_calendar, event.calendar_id)
             result = self._provider.update_event(event)
 
         if result.error is not None:
@@ -354,11 +375,11 @@ class SyncService:
         if result.error is not None:
             if result.error.code is ErrorCode.NOT_FOUND:
                 # The event is already gone, which is the outcome we wanted.
-                self._repository.delete(event_id)
+                self._repository.delete(event_id, calendar_id or None)
                 return self._retry_queue.complete(job.id, now=now)
             return self._record_provider_failure(job, result.error, now=now)
 
-        self._repository.delete(event_id)
+        self._repository.delete(event_id, calendar_id or None)
         return self._retry_queue.complete(job.id, now=now)
 
     def _record_provider_failure(
@@ -386,12 +407,25 @@ class SyncService:
             now=now,
         )
 
-    def _cached_calendar_id(self, event_id: str) -> str:
-        """Return the calendar a cached event came from, or blank when unknown."""
+    def _cached_calendar_id(self, event_id: str, *hints: str) -> Result[str]:
+        """Return the calendar a cached event came from, or blank when unknown.
+
+        The first hint that names a cached copy wins.  Without a matching hint
+        the bare id must identify exactly one cached event; an id cached in
+        several calendars is returned as an error rather than guessed.  Other
+        cache failures fall back to blank so the provider uses its default.
+        """
+        for hint in hints:
+            if hint and self._repository.get(event_id, hint).error is None:
+                return Result.ok(hint)
+        if any(hints[:1]):
+            return Result.ok("")
         cached = self._repository.get(event_id)
-        if cached.error is not None or cached.value is None:
-            return ""
-        return cached.value.calendar_id
+        if cached.error is not None:
+            if cached.error.code is ErrorCode.INVALID_ARGUMENT:
+                return Result.fail(cached.error.code, cached.error.message)
+            return Result.ok("")
+        return Result.ok(cached.value.calendar_id if cached.value else "")
 
     def _cache_event(self, event: Event) -> None:
         """Best-effort cache refresh after the provider has confirmed a write.

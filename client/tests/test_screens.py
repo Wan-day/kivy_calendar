@@ -38,6 +38,8 @@ class FakeClient:
         self.free_slots: list[Any] = []
         self.free_slot_requests: list[tuple[int, datetime, datetime, str]] = []
         self.calendar_calls = 0
+        self.update_sources: list[str] = []
+        self.delete_calendars: list[str] = []
         self.calendars: list[Any] | None = None
         self.calendar_error: BaseException | None = None
         self.time_zones: list[Any] | None = None
@@ -61,14 +63,16 @@ class FakeClient:
         self.created.append(event)
         return replace(event, queued=self.queued)
 
-    def update_event(self, event: Any) -> Any:
+    def update_event(self, event: Any, source_calendar_id: str = "") -> Any:
         """Record an update and return the event (queued when configured)."""
         self.updated.append(event)
+        self.update_sources.append(source_calendar_id)
         return replace(event, queued=self.queued)
 
-    def delete_event(self, event_id: str) -> bool:
+    def delete_event(self, event_id: str, calendar_id: str = "") -> bool:
         """Record a delete."""
         self.deleted.append(event_id)
+        self.delete_calendars.append(calendar_id)
         return self.queued
 
     def list_events(self) -> list[Any]:
@@ -396,6 +400,7 @@ def test_editing_saves_through_update_event() -> None:
     add_event_screen._persist_event(client, event, editing=True)
 
     assert client.updated == [event]
+    assert client.update_sources == ["work@example.com"]
     assert client.created == []
 
 
@@ -405,9 +410,10 @@ def test_deleting_sends_the_event_id() -> None:
     _, _, add_event_screen = _make_screens(client)
     add_event_screen.open_for(_sample_event())
 
-    add_event_screen._delete_event(client, "event-1")
+    add_event_screen._delete_event(client, "event-1", "work@example.com")
 
     assert client.deleted == ["event-1"]
+    assert client.delete_calendars == ["work@example.com"]
 
 
 def test_sync_button_syncs_and_reloads_the_event_list(

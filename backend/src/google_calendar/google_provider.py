@@ -62,6 +62,7 @@ Operational exceptions never escape the provider.
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from collections.abc import Callable
@@ -85,6 +86,7 @@ SYNC_WINDOW_FUTURE = timedelta(days=365)
 MAX_RESULTS = 2500
 
 _READABLE_ACCESS_ROLES = frozenset({"owner", "writer", "reader"})
+_WRITABLE_ACCESS_ROLES = frozenset({"owner", "writer"})
 # Google names the account's own calendar after the user (often the account's
 # email address).  The app always calls it "Primary" so the dropdown never shows
 # an email address as a calendar name.
@@ -129,6 +131,7 @@ class GoogleCalendarProvider:
         self._calendar_id = calendar_id
         self._time_zone = time_zone
         self._read_only_calendars: set[str] = set()
+        self._primary_id: str | None = None
 
     @classmethod
     def from_credentials(
@@ -168,7 +171,7 @@ class GoogleCalendarProvider:
         slot of a recurring series, so the Google insert creates or replaces that
         override instead of creating a standalone event.
         """
-        calendar_id = event.calendar_id or self._calendar_id
+        calendar_id = self._resolve(event.calendar_id or self._calendar_id)
         if event.recurring_event_id:
             return self._event_request(
                 lambda: self._service.events().insert(
@@ -199,7 +202,7 @@ class GoogleCalendarProvider:
         patched in place (creating an override); retrying is idempotent and
         the series itself is untouched.
         """
-        calendar_id = event.calendar_id or self._calendar_id
+        calendar_id = self._resolve(event.calendar_id or self._calendar_id)
         if event.recurring_event_id:
             body = _event_to_payload(event)
             body.pop("recurringEventId", None)
@@ -234,8 +237,8 @@ class GoogleCalendarProvider:
         Google treats a calendar as part of an event's identity, so a move is a
         dedicated operation rather than a field change on ``patch``.
         """
-        source = calendar_id or self._calendar_id
-        destination = destination_calendar_id or self._calendar_id
+        source = self._resolve(calendar_id or self._calendar_id)
+        destination = self._resolve(destination_calendar_id or self._calendar_id)
         if not destination.strip():
             return Result.fail(
                 ErrorCode.INVALID_ARGUMENT,
@@ -254,7 +257,10 @@ class GoogleCalendarProvider:
         )
 
     def list_calendars(self) -> Result[list[CalendarInfo]]:
-        """Return the calendars offered in the event form, primary first.
+        """Return the writable calendars offered in the event form, primary first.
+
+        Read-only (reader) calendars are still read by :meth:`list_events` but
+        are never offered as a save or move target.
 
         Calendars Google names after an email address are hidden unless they
         are the account's primary calendar or the configured default; the
@@ -269,9 +275,12 @@ class GoogleCalendarProvider:
         calendars = [
             calendar
             for calendar in entries.value or []
-            if calendar.primary
-            or calendar.id == self._calendar_id
-            or _EMAIL_PATTERN.fullmatch(calendar.summary) is None
+            if calendar.writable
+            and (
+                calendar.primary
+                or calendar.id == self._calendar_id
+                or _EMAIL_PATTERN.fullmatch(calendar.summary) is None
+            )
         ]
         calendars.sort(
             key=lambda calendar: (
@@ -283,7 +292,7 @@ class GoogleCalendarProvider:
 
     def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:
         """Delete the upstream event, reporting a missing event as an error."""
-        target = calendar_id or self._calendar_id
+        target = self._resolve(calendar_id or self._calendar_id)
         response = self._execute(
             lambda: self._service.events().delete(
                 calendarId=target,
@@ -300,7 +309,7 @@ class GoogleCalendarProvider:
         event_id: str,
     ) -> Result[Event | None]:
         """Return the upstream event, or ``None`` when Google does not have it."""
-        target = calendar_id or self._calendar_id
+        target = self._resolve(calendar_id or self._calendar_id)
         response = self._execute(
             lambda: self._service.events().get(
                 calendarId=target,
@@ -328,8 +337,8 @@ class GoogleCalendarProvider:
         occurrence is returned as its own event.  Without explicit bounds the
         window is :data:`SYNC_WINDOW_PAST` before to :data:`SYNC_WINDOW_FUTURE`
         after now.  Google can expose the same event through more than one
-        calendar, so duplicate ids are collapsed to the first calendar that
-        lists them.
+        calendar; each calendar's copy is kept, identified by its calendar and
+        event id.
         """
         now = datetime.now(UTC)
         window_start = time_min or now - SYNC_WINDOW_PAST
@@ -350,7 +359,7 @@ class GoogleCalendarProvider:
             return Result.fail(calendars.error.code, calendars.error.message)
 
         events: list[Event] = []
-        seen: set[str] = set()
+        seen: set[tuple[str, str]] = set()
         for calendar_id in calendars.value or []:
             listed = self._list_calendar_events(
                 calendar_id, window_start, window_end
@@ -358,9 +367,10 @@ class GoogleCalendarProvider:
             if listed.error is not None:
                 return Result.fail(listed.error.code, listed.error.message)
             for event in listed.value or []:
-                if event.id in seen:
+                key = (event.calendar_id, event.id)
+                if key in seen:
                     continue
-                seen.add(event.id)
+                seen.add(key)
                 events.append(event)
         return Result.ok(events)
 
@@ -369,11 +379,33 @@ class GoogleCalendarProvider:
         entries = self._calendar_entries()
         if entries.error is not None:
             return Result.fail(entries.error.code, entries.error.message)
-        calendar_ids = [self._calendar_id]
+        calendar_ids = [self._resolve(self._calendar_id)]
         for calendar in entries.value or []:
             if calendar.id not in calendar_ids:
                 calendar_ids.append(calendar.id)
         return Result.ok(calendar_ids)
+
+    def _resolve(self, calendar_id: str) -> str:
+        """Return the real id behind the ``primary`` alias, once per provider.
+
+        Google accepts ``primary`` as an alias but reports the account's own
+        calendar under its real id (usually an email address).  Using one id
+        everywhere keeps cached events and the calendar dropdown consistent.
+        A lookup failure keeps the alias and is retried on the next call.
+        """
+        if calendar_id != DEFAULT_CALENDAR_ID:
+            return calendar_id
+        if self._primary_id is None:
+            response = self._execute(
+                lambda: self._service.calendarList().get(
+                    calendarId=DEFAULT_CALENDAR_ID
+                )
+            )
+            raw = response.value
+            real = raw.get("id") if isinstance(raw, dict) else None
+            if isinstance(real, str) and real.strip():
+                self._primary_id = real
+        return self._primary_id or calendar_id
 
     def _calendar_entries(self) -> Result[list[CalendarInfo]]:
         """Return readable calendars from Google's calendar list, paginated."""
@@ -399,8 +431,10 @@ class GoogleCalendarProvider:
                     continue
                 seen.add(calendar.id)
                 entries.append(calendar)
-                if isinstance(item, dict) and item.get("accessRole") == "reader":
+                if not calendar.writable:
                     self._read_only_calendars.add(calendar.id)
+                if calendar.primary:
+                    self._primary_id = calendar.id
 
             page_token = _next_page_token(response.value)
             if page_token is None:
@@ -867,6 +901,7 @@ def _calendar_info(item: object) -> CalendarInfo | None:
         id=calendar_id,
         summary=summary,
         primary=primary,
+        writable=item.get("accessRole") in _WRITABLE_ACCESS_ROLES,
     )
 
 
@@ -904,7 +939,10 @@ def _error_from_exception(exc: BaseException) -> Error:
         )
     if isinstance(exc, HttpError):
         status = _http_status(exc)
-        return Error(_code_for_status(status), _http_error_message(status, exc))
+        return Error(
+            _code_for_status(status, _http_reason(exc)),
+            _http_error_message(status, exc),
+        )
     return Error(
         ErrorCode.UPSTREAM_ERROR,
         f"Google Calendar request failed: {exc}",
@@ -921,9 +959,50 @@ def _http_status(error: HttpError) -> int | None:
     return status if isinstance(status, int) else None
 
 
-def _code_for_status(status: int | None) -> ErrorCode:
-    """Classify an HTTP status as a permanent or retryable provider error."""
+# 403 reasons Google uses for throttling; these heal on their own.
+_RATE_LIMIT_REASONS = frozenset(
+    {
+        "ratelimitexceeded",
+        "userratelimitexceeded",
+        "quotaexceeded",
+        "dailylimitexceeded",
+        "backenderror",
+    }
+)
+
+
+def _http_reason(error: HttpError) -> str | None:
+    """Return Google's machine-readable error reason, if the payload has one."""
+    details = getattr(error, "error_details", None)
+    if isinstance(details, list):
+        for detail in details:
+            reason = detail.get("reason") if isinstance(detail, dict) else None
+            if isinstance(reason, str) and reason:
+                return reason
+    content = getattr(error, "content", None)
+    try:
+        payload = json.loads(content) if content else None
+    except (TypeError, ValueError):
+        return None
+    body = payload.get("error") if isinstance(payload, dict) else None
+    errors = body.get("errors") if isinstance(body, dict) else None
+    if isinstance(errors, list):
+        for item in errors:
+            reason = item.get("reason") if isinstance(item, dict) else None
+            if isinstance(reason, str) and reason:
+                return reason
+    return None
+
+
+def _code_for_status(status: int | None, reason: str | None = None) -> ErrorCode:
+    """Classify an HTTP status as a permanent or retryable provider error.
+
+    A 403 is either throttling (retryable) or a permission failure such as
+    ``forbidden`` or ``insufficientPermissions`` (permanent).
+    """
     match status:
+        case 403 if (reason or "").casefold() not in _RATE_LIMIT_REASONS:
+            return ErrorCode.PERMISSION_DENIED
         case 400:
             return ErrorCode.INVALID_ARGUMENT
         case 401:
@@ -933,9 +1012,9 @@ def _code_for_status(status: int | None) -> ErrorCode:
         case 409:
             return ErrorCode.ALREADY_EXISTS
         case _:
-            # 403, 429, 5xx, and unknown statuses are transient from the
-            # caller's point of view; retrying is safe because creates use a
-            # client id.  403 reason parsing is not implemented.
+            # Rate-limit 403s, 429, 5xx, and unknown statuses are transient from
+            # the caller's point of view; retrying is safe because creates use a
+            # client id.
             return ErrorCode.UPSTREAM_ERROR
 
 

@@ -21,6 +21,7 @@ _ERROR_STATUS: dict[ErrorCode, int] = {
     ErrorCode.UPSTREAM_ERROR: 503,
     ErrorCode.AUTH_ERROR: 401,
     ErrorCode.QUEUED: 202,
+    ErrorCode.PERMISSION_DENIED: 403,
 }
 
 # Client-facing messages. Detail from upstream/storage errors (Google error
@@ -34,6 +35,8 @@ _GENERIC_MESSAGE: dict[ErrorCode, str] = {
     ErrorCode.STORAGE_ERROR: "internal storage error",
     ErrorCode.UPSTREAM_ERROR: "calendar service unavailable",
     ErrorCode.AUTH_ERROR: "authentication failed",
+    ErrorCode.PERMISSION_DENIED: "permission denied",
+    ErrorCode.QUEUED: "queued for retry",
 }
 
 

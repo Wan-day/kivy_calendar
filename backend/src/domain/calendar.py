@@ -7,7 +7,7 @@ app needs the list of calendars the account can write to.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class CalendarInfo(BaseModel):
@@ -18,6 +18,9 @@ class CalendarInfo(BaseModel):
     id: str
     summary: str
     primary: bool = False
+    # Whether events can be saved or moved here.  Internal: read-only calendars
+    # are filtered out of the calendar list, so it is never serialized.
+    writable: bool = Field(default=True, exclude=True)
 
     @field_validator("id", "summary")
     @classmethod
