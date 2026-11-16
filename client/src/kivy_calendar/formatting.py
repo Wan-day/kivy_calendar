@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from kivy_calendar.api import CalendarEvent
 
@@ -43,3 +44,32 @@ def format_event_when(event: CalendarEvent) -> str:
 def to_input_value(value: datetime) -> str:
     """Format a datetime for an ISO datetime text field."""
     return value.isoformat(timespec="minutes")
+
+
+def to_wall_clock_value(value: datetime, zone: str) -> str:
+    """Format ``value`` as wall-clock time in IANA ``zone`` without an offset."""
+    local = value.astimezone(ZoneInfo(zone))
+    return local.replace(tzinfo=None).isoformat(timespec="minutes")
+
+
+def localize_wall_clock(text: str, zone: str) -> datetime:
+    """Return the aware datetime for wall-clock ``text`` in IANA ``zone``.
+
+    The chosen zone alone decides the instant, so DST is applied correctly:
+    15:00 in Europe/Berlin is +01:00 in January and +02:00 in July.  Any UTC
+    offset typed into ``text`` is ignored.  Raises ``ValueError`` for text
+    that is not an ISO datetime, an unknown zone, or a wall-clock time that
+    does not exist in the zone (a DST gap).  Ambiguous times use the first
+    occurrence.
+    """
+    try:
+        parsed = datetime.fromisoformat(text.strip())
+        tz = ZoneInfo(zone)
+    except (ValueError, ZoneInfoNotFoundError) as error:
+        raise ValueError(str(error)) from error
+    naive = parsed.replace(tzinfo=None)
+    aware = naive.replace(tzinfo=tz)
+    if aware.astimezone(UTC).astimezone(tz).replace(tzinfo=None) != naive:
+        shown = naive.isoformat(timespec="minutes")
+        raise ValueError(f"{shown} does not exist in {zone}")
+    return aware

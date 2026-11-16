@@ -30,7 +30,8 @@ from kivy_calendar.api import (
 from kivy_calendar.formatting import (
     DEFAULT_TIME_ZONE,
     default_event_times,
-    to_input_value,
+    localize_wall_clock,
+    to_wall_clock_value,
 )
 from kivy_calendar.screens.ui import wrapped_label
 
@@ -174,10 +175,10 @@ class AddEventScreen(Screen):
         form.add_widget(all_day_row)
 
         self._start_field, self._start_label = _field_with_label(
-            "Start (ISO datetime with offset)", self.start
+            "Start (local time, 2026-11-09T14:00)", self.start
         )
         self._end_field, self._end_label = _field_with_label(
-            "End (ISO datetime with offset)", self.end
+            "End (local time, 2026-11-09T16:00)", self.end
         )
         form.add_widget(self._start_field)
         form.add_widget(self._end_field)
@@ -254,8 +255,8 @@ class AddEventScreen(Screen):
                     end_day = event.start.date()
                 self.end.text = end_day.isoformat()
             else:
-                self.start.text = to_input_value(event.start)
-                self.end.text = to_input_value(event.end)
+                self.start.text = self._wall_clock(event.start, event.start_timezone)
+                self.end.text = self._wall_clock(event.end, event.end_timezone)
             self._refresh_time_zone_choices(
                 event.start_timezone, event.end_timezone
             )
@@ -472,10 +473,12 @@ class AddEventScreen(Screen):
         if self.all_day.active:
             return 24 * 60
         try:
-            start = datetime.fromisoformat(self.start.text.strip())
-            end = datetime.fromisoformat(self.end.text.strip())
-            if (start.tzinfo is None) != (end.tzinfo is None):
-                return 60
+            start = localize_wall_clock(
+                self.start.text, self._resolved_time_zone(self.start_timezone.text)
+            )
+            end = localize_wall_clock(
+                self.end.text, self._resolved_time_zone(self.end_timezone.text)
+            )
             difference = end - start
         except (TypeError, ValueError):
             return 60
@@ -517,8 +520,10 @@ class AddEventScreen(Screen):
             self._set_status("No free slot found in the next 7 days.")
             return
         slot = slots[0]
-        self.start.text = to_input_value(slot.start)
-        self.end.text = to_input_value(slot.end)
+        start_zone = self._resolved_time_zone(self.start_timezone.text)
+        end_zone = self._resolved_time_zone(self.end_timezone.text)
+        self.start.text = self._wall_clock(slot.start, start_zone)
+        self.end.text = self._wall_clock(slot.end, end_zone)
         self._set_status("Suggested a free time.")
 
     def _on_all_day_changed(self, instance: CheckBox, value: bool) -> None:
@@ -537,9 +542,7 @@ class AddEventScreen(Screen):
             self.start.text = start_day.isoformat()
             self.end.text = start_day.isoformat()
         else:
-            start, end = default_event_times()
-            self.start.text = to_input_value(start)
-            self.end.text = to_input_value(end)
+            self._fill_default_times()
 
     def _apply_all_day_mode(self, all_day: bool) -> None:
         """Update field hints and captions for the chosen event kind."""
@@ -551,8 +554,8 @@ class AddEventScreen(Screen):
         else:
             self.start.hint_text = ""
             self.end.hint_text = ""
-            self._start_label.text = "Start (ISO datetime with offset)"
-            self._end_label.text = "End (ISO datetime with offset)"
+            self._start_label.text = "Start (local time, 2026-11-09T14:00)"
+            self._end_label.text = "End (local time, 2026-11-09T16:00)"
         self.suggest_button.disabled = all_day or self.save_button.disabled
 
     def confirm_delete(self, *args: Any) -> None:
@@ -678,25 +681,19 @@ class AddEventScreen(Screen):
             end = end_inclusive + timedelta(days=1)
             all_day = True
         else:
-            try:
-                start = datetime.fromisoformat(self.start.text.strip())
-                end = datetime.fromisoformat(self.end.text.strip())
-            except ValueError:
-                self._set_status(
-                    "Use ISO times such as 2026-11-09T14:00+01:00.",
-                    error=True,
-                )
-                return None
-            if start.tzinfo is None or end.tzinfo is None:
-                self._set_status(
-                    "Start and end must include a UTC offset or zone.",
-                    error=True,
-                )
-                return None
             for time_zone in (start_timezone, end_timezone):
                 if not self._is_known_time_zone(time_zone):
                     self._set_status(f"Unknown time zone: {time_zone}", error=True)
                     return None
+            try:
+                start = localize_wall_clock(self.start.text, start_timezone)
+                end = localize_wall_clock(self.end.text, end_timezone)
+            except ValueError as error:
+                self._set_status(
+                    f"Use local times such as 2026-11-09T14:00 ({error}).",
+                    error=True,
+                )
+                return None
             if end <= start:
                 self._set_status("End must be after start.", error=True)
                 return None
@@ -725,6 +722,24 @@ class AddEventScreen(Screen):
             ),
         )
 
+    def _fill_default_times(self) -> None:
+        """Prefill the next full hour as wall-clock time in the default zone."""
+        try:
+            now = datetime.now(ZoneInfo(self.time_zone))
+        except (ValueError, ZoneInfoNotFoundError):
+            now = None
+        start, end = default_event_times(now)
+        self.start.text = self._wall_clock(start, self.time_zone)
+        self.end.text = self._wall_clock(end, self.time_zone)
+
+    @staticmethod
+    def _wall_clock(value: datetime, zone: str) -> str:
+        """Return ``value`` as wall-clock text in ``zone``."""
+        try:
+            return to_wall_clock_value(value, zone)
+        except (ValueError, ZoneInfoNotFoundError):
+            return value.replace(tzinfo=None).isoformat(timespec="minutes")
+
     def _resolved_time_zone(self, raw: str) -> str:
         """Return the IANA zone for a dropdown label or a zone name."""
         text = raw.strip()
@@ -742,11 +757,9 @@ class AddEventScreen(Screen):
     def _reset_form(self) -> None:
         """Clear the form and prefill a fresh time window and time zone."""
         self.all_day.active = False
-        start, end = default_event_times()
         self.summary.text = ""
         self.description.text = ""
-        self.start.text = to_input_value(start)
-        self.end.text = to_input_value(end)
+        self._fill_default_times()
         self._refresh_time_zone_choices(self.time_zone, self.time_zone)
         self._apply_all_day_mode(False)
 
