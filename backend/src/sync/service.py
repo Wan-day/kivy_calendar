@@ -76,6 +76,7 @@ class SyncService:
                 "calendar provider reported success without an event",
             )
         self._cache_event(confirmed)
+        self._retry_queue.supersede_for_event(event.id)
         return result
 
     def update_event(self, event: Event) -> Result[Event]:
@@ -133,6 +134,7 @@ class SyncService:
                 "calendar provider reported success without an event",
             )
         self._cache_event(confirmed)
+        self._retry_queue.supersede_for_event(event.id)
         return result
 
     def delete_event(self, event_id: str) -> Result[None]:
@@ -145,6 +147,9 @@ class SyncService:
         calendar_id = self._cached_calendar_id(event_id)
         result = self._provider.delete_event(calendar_id, event_id)
         if result.error is not None:
+            if result.error.code is ErrorCode.NOT_FOUND:
+                # Google has no such event, so a queued create must not make it.
+                self._retry_queue.supersede_for_event(event_id)
             return self._queue_failed_write(
                 DELETE_OPERATION,
                 {
@@ -155,6 +160,7 @@ class SyncService:
             )
 
         self._repository.delete(event_id)
+        self._retry_queue.supersede_for_event(event_id)
         return result
 
     def sync_from_google(self) -> Result[int]:

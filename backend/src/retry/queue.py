@@ -3,6 +3,12 @@
 Jobs survive process restarts and are claimed before work is attempted.  This
 phase only provides the queue mechanics; actually performing Google Calendar
 calls is out of scope.
+
+Jobs that target the same event replay in the order they were enqueued: a job
+is only claimable while it is the oldest open (pending or in-progress) job of
+its event.  Enqueuing a newer job, or a direct write that succeeded, supersedes
+older pending jobs for that event so stale work can never overwrite newer
+state or resurrect a deleted event.
 """
 
 from __future__ import annotations
@@ -18,6 +24,20 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from core.errors import ErrorCode, Result
 from core.sqlite import Database, run_in_transaction
+from google_calendar.provider import ProviderOperation
+
+SUPERSEDED_MARKER = "superseded by a newer write"
+
+_CREATE = ProviderOperation.CREATE.value
+_UPDATE = ProviderOperation.UPDATE.value
+_DELETE = ProviderOperation.DELETE.value
+
+# Operations a newly enqueued job makes obsolete for the same event.
+_SUPERSEDES: dict[str, frozenset[str] | None] = {
+    _CREATE: frozenset({_CREATE, _UPDATE}),
+    _UPDATE: frozenset({_UPDATE}),
+    _DELETE: None,  # a delete makes every older pending job obsolete
+}
 
 DEFAULT_MAX_ATTEMPTS = 5
 DEFAULT_BASE_DELAY_SECONDS = 30.0
@@ -65,7 +85,11 @@ _INSERT = f"INSERT INTO retry_jobs ({_COLUMN_LIST}) VALUES ({_PLACEHOLDERS})"
 _DUE_SELECT = (
     f"SELECT {_COLUMN_LIST} FROM retry_jobs "
     "WHERE status = ? AND available_at <= ? "
-    "ORDER BY available_at, created_at, id LIMIT ?"
+    "ORDER BY available_at, created_at, id"
+)
+_OPEN_SELECT = (
+    f"SELECT {_COLUMN_LIST} FROM retry_jobs "
+    "WHERE status IN (?, ?) ORDER BY created_at, rowid"
 )
 
 
@@ -174,6 +198,12 @@ class RetryQueue:
             return Result.fail(ErrorCode.INVALID_ARGUMENT, str(exc))
 
         def operation_fn(connection: sqlite3.Connection) -> Result[RetryJob]:
+            _supersede_pending(
+                connection,
+                _job_event_id(job.payload),
+                _SUPERSEDES.get(job.operation, frozenset()),
+                _format_timestamp(current_time),
+            )
             try:
                 connection.execute(_INSERT, _job_values(job))
             except sqlite3.IntegrityError:
@@ -184,6 +214,36 @@ class RetryQueue:
             return Result.ok(job)
 
         return run_in_transaction(self._database, _SCHEMA, operation_fn)
+
+    def supersede_for_event(
+        self,
+        event_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> Result[int]:
+        """Drop every pending job for ``event_id`` after a newer write won.
+
+        Call this once a direct write (create, update, or delete) for the event
+        has succeeded: any older job still waiting to be retried is obsolete.
+        Jobs already in progress are left alone.  Returns the number of jobs
+        that were superseded.
+        """
+        try:
+            current_time = _as_utc(now if now is not None else datetime.now(UTC))
+        except ValueError as exc:
+            return Result.fail(ErrorCode.INVALID_ARGUMENT, str(exc))
+
+        def operation(connection: sqlite3.Connection) -> Result[int]:
+            return Result.ok(
+                _supersede_pending(
+                    connection,
+                    event_id,
+                    None,
+                    _format_timestamp(current_time),
+                )
+            )
+
+        return run_in_transaction(self._database, _SCHEMA, operation)
 
     def get(self, job_id: str) -> Result[RetryJob]:
         """Return one job by id."""
@@ -214,14 +274,11 @@ class RetryQueue:
             )
 
         def operation(connection: sqlite3.Connection) -> Result[list[RetryJob]]:
-            rows = connection.execute(
-                _DUE_SELECT,
-                (
-                    RetryStatus.PENDING.value,
-                    _format_timestamp(current_time),
-                    limit,
-                ),
-            ).fetchall()
+            rows = _eligible_due_rows(
+                connection,
+                _format_timestamp(current_time),
+                limit,
+            )
             return Result.ok([_row_to_job(row) for row in rows])
 
         return run_in_transaction(self._database, _SCHEMA, operation)
@@ -246,10 +303,7 @@ class RetryQueue:
         current_timestamp = _format_timestamp(current_time)
 
         def operation(connection: sqlite3.Connection) -> Result[list[RetryJob]]:
-            rows = connection.execute(
-                _DUE_SELECT,
-                (RetryStatus.PENDING.value, current_timestamp, limit),
-            ).fetchall()
+            rows = _eligible_due_rows(connection, current_timestamp, limit)
             claimed: list[RetryJob] = []
             for row in rows:
                 cursor = connection.execute(
@@ -476,6 +530,84 @@ class RetryQueue:
         exponent = max(attempts - 1, 0)
         delay = self._base_delay_seconds * (2**exponent)
         return timedelta(seconds=min(delay, self._max_delay_seconds))
+
+
+def _job_event_id(payload: dict[str, Any]) -> str | None:
+    """Return the event a job targets, read from its payload."""
+    raw_event = payload.get("event")
+    candidate = raw_event.get("id") if isinstance(raw_event, dict) else None
+    if candidate is None:
+        candidate = payload.get("event_id")
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate
+    return None
+
+
+def _supersede_pending(
+    connection: sqlite3.Connection,
+    event_id: str | None,
+    operations: frozenset[str] | None,
+    timestamp: str,
+) -> int:
+    """Complete pending jobs of ``event_id`` made obsolete by a newer write.
+
+    ``operations`` limits which job operations are dropped; ``None`` drops all.
+    """
+    if event_id is None or (operations is not None and not operations):
+        return 0
+    rows = connection.execute(
+        f"SELECT {_COLUMN_LIST} FROM retry_jobs WHERE status = ?",
+        (RetryStatus.PENDING.value,),
+    ).fetchall()
+    dropped = 0
+    for row in rows:
+        if operations is not None and row["operation"] not in operations:
+            continue
+        if _job_event_id(json.loads(row["payload"])) != event_id:
+            continue
+        connection.execute(
+            "UPDATE retry_jobs SET status = ?, last_error = ?, completed_at = ?, "
+            "updated_at = ? WHERE id = ? AND status = ?",
+            (
+                RetryStatus.COMPLETED.value,
+                SUPERSEDED_MARKER,
+                timestamp,
+                timestamp,
+                row["id"],
+                RetryStatus.PENDING.value,
+            ),
+        )
+        dropped += 1
+    return dropped
+
+
+def _eligible_due_rows(
+    connection: sqlite3.Connection,
+    timestamp: str,
+    limit: int,
+) -> list[sqlite3.Row]:
+    """Return due pending rows that are the oldest open job of their event."""
+    oldest_open: dict[str, str] = {}
+    for row in connection.execute(
+        _OPEN_SELECT,
+        (RetryStatus.PENDING.value, RetryStatus.IN_PROGRESS.value),
+    ).fetchall():
+        event_id = _job_event_id(json.loads(row["payload"]))
+        if event_id is not None:
+            oldest_open.setdefault(event_id, row["id"])
+
+    eligible: list[sqlite3.Row] = []
+    for row in connection.execute(
+        _DUE_SELECT,
+        (RetryStatus.PENDING.value, timestamp),
+    ).fetchall():
+        event_id = _job_event_id(json.loads(row["payload"]))
+        if event_id is not None and oldest_open.get(event_id) != row["id"]:
+            continue
+        eligible.append(row)
+        if len(eligible) >= limit:
+            break
+    return eligible
 
 
 def _as_utc(value: datetime) -> datetime:

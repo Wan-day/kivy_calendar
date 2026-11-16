@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from core.errors import ErrorCode, Result
 from core.sqlite import Database
-from retry.queue import RetryJob, RetryQueue, RetryStatus
+from retry.queue import SUPERSEDED_MARKER, RetryJob, RetryQueue, RetryStatus
 
 NOW = datetime(2026, 11, 6, 12, 0, tzinfo=UTC)
 
@@ -342,3 +342,92 @@ def test_reclaim_stale_rejects_invalid_arguments(queue: RetryQueue) -> None:
     for result in (zero, naive):
         assert result.error is not None
         assert result.error.code is ErrorCode.INVALID_ARGUMENT
+
+
+def _event_payload(event_id: str) -> dict[str, object]:
+    return {"event": {"id": event_id}}
+
+
+def test_jobs_for_one_event_wait_for_the_oldest_open_job(
+    queue: RetryQueue,
+) -> None:
+    """A newer job is not claimable while an older one is backing off."""
+    create = _job(queue.enqueue("create_event", _event_payload("a"), now=NOW))
+    claimed = _jobs(queue.claim_due(now=NOW))
+    assert [job.id for job in claimed] == [create.id]
+    backing_off = _job(queue.fail(create.id, "offline", now=NOW))
+    update = _job(
+        queue.enqueue(
+            "update_event",
+            _event_payload("a"),
+            now=NOW + timedelta(seconds=1),
+        )
+    )
+
+    later = backing_off.available_at - timedelta(seconds=1)
+    assert _jobs(queue.claim_due(now=later)) == []
+
+    ready = _jobs(queue.claim_due(now=backing_off.available_at))
+    assert [job.id for job in ready] == [create.id]
+    # The update stays blocked while the create is in progress.
+    assert _jobs(queue.claim_due(now=backing_off.available_at)) == []
+    _job(queue.complete(create.id, now=backing_off.available_at))
+    after = _jobs(queue.claim_due(now=backing_off.available_at))
+    assert [job.id for job in after] == [update.id]
+
+
+def test_other_events_are_not_blocked(queue: RetryQueue) -> None:
+    first = _job(queue.enqueue("create_event", _event_payload("a"), now=NOW))
+    _jobs(queue.claim_due(now=NOW))
+    _job(queue.fail(first.id, "offline", now=NOW))
+    other = _job(queue.enqueue("create_event", _event_payload("b"), now=NOW))
+
+    assert [job.id for job in _jobs(queue.claim_due(now=NOW))] == [other.id]
+
+
+def test_a_failed_job_stops_blocking_later_jobs(queue: RetryQueue) -> None:
+    first = _job(queue.enqueue("create_event", _event_payload("a"), now=NOW))
+    _jobs(queue.claim_due(now=NOW))
+    _job(queue.fail_permanently(first.id, "bad", now=NOW))
+    second = _job(queue.enqueue("update_event", _event_payload("a"), now=NOW))
+
+    assert [job.id for job in _jobs(queue.claim_due(now=NOW))] == [second.id]
+
+
+def test_a_newer_update_supersedes_older_pending_updates(
+    queue: RetryQueue,
+) -> None:
+    create = _job(queue.enqueue("create_event", _event_payload("a"), now=NOW))
+    old = _job(queue.enqueue("update_event", _event_payload("a"), now=NOW))
+    new = _job(queue.enqueue("update_event", _event_payload("a"), now=NOW))
+
+    assert _job(queue.get(old.id)).status is RetryStatus.COMPLETED
+    assert _job(queue.get(old.id)).last_error == SUPERSEDED_MARKER
+    assert _job(queue.get(create.id)).status is RetryStatus.PENDING
+    assert _job(queue.get(new.id)).status is RetryStatus.PENDING
+
+
+def test_a_delete_supersedes_every_older_pending_job(queue: RetryQueue) -> None:
+    create = _job(queue.enqueue("create_event", _event_payload("a"), now=NOW))
+    update = _job(queue.enqueue("update_event", _event_payload("a"), now=NOW))
+    other = _job(queue.enqueue("create_event", _event_payload("b"), now=NOW))
+    delete = _job(queue.enqueue("delete_event", {"event_id": "a"}, now=NOW))
+
+    assert _job(queue.get(create.id)).status is RetryStatus.COMPLETED
+    assert _job(queue.get(update.id)).status is RetryStatus.COMPLETED
+    assert _job(queue.get(other.id)).status is RetryStatus.PENDING
+    assert _job(queue.get(delete.id)).status is RetryStatus.PENDING
+
+
+def test_supersede_for_event_leaves_in_progress_jobs_alone(
+    queue: RetryQueue,
+) -> None:
+    running = _job(queue.enqueue("update_event", _event_payload("a"), now=NOW))
+    _jobs(queue.claim_due(now=NOW))
+    pending = _job(queue.enqueue("delete_event", {"event_id": "a"}, now=NOW))
+
+    result = queue.supersede_for_event("a", now=NOW)
+
+    assert result.value == 1
+    assert _job(queue.get(running.id)).status is RetryStatus.IN_PROGRESS
+    assert _job(queue.get(pending.id)).status is RetryStatus.COMPLETED
