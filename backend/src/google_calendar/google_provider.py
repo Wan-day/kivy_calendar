@@ -58,6 +58,7 @@ Operational exceptions never escape the provider.
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from collections.abc import Callable
@@ -852,7 +853,10 @@ def _error_from_exception(exc: BaseException) -> Error:
         )
     if isinstance(exc, HttpError):
         status = _http_status(exc)
-        return Error(_code_for_status(status), _http_error_message(status, exc))
+        return Error(
+            _code_for_status(status, _http_reason(exc)),
+            _http_error_message(status, exc),
+        )
     return Error(
         ErrorCode.UPSTREAM_ERROR,
         f"Google Calendar request failed: {exc}",
@@ -869,9 +873,50 @@ def _http_status(error: HttpError) -> int | None:
     return status if isinstance(status, int) else None
 
 
-def _code_for_status(status: int | None) -> ErrorCode:
-    """Classify an HTTP status as a permanent or retryable provider error."""
+# 403 reasons Google uses for throttling; these heal on their own.
+_RATE_LIMIT_REASONS = frozenset(
+    {
+        "ratelimitexceeded",
+        "userratelimitexceeded",
+        "quotaexceeded",
+        "dailylimitexceeded",
+        "backenderror",
+    }
+)
+
+
+def _http_reason(error: HttpError) -> str | None:
+    """Return Google's machine-readable error reason, if the payload has one."""
+    details = getattr(error, "error_details", None)
+    if isinstance(details, list):
+        for detail in details:
+            reason = detail.get("reason") if isinstance(detail, dict) else None
+            if isinstance(reason, str) and reason:
+                return reason
+    content = getattr(error, "content", None)
+    try:
+        payload = json.loads(content) if content else None
+    except (TypeError, ValueError):
+        return None
+    body = payload.get("error") if isinstance(payload, dict) else None
+    errors = body.get("errors") if isinstance(body, dict) else None
+    if isinstance(errors, list):
+        for item in errors:
+            reason = item.get("reason") if isinstance(item, dict) else None
+            if isinstance(reason, str) and reason:
+                return reason
+    return None
+
+
+def _code_for_status(status: int | None, reason: str | None = None) -> ErrorCode:
+    """Classify an HTTP status as a permanent or retryable provider error.
+
+    A 403 is either throttling (retryable) or a permission failure such as
+    ``forbidden`` or ``insufficientPermissions`` (permanent).
+    """
     match status:
+        case 403 if (reason or "").casefold() not in _RATE_LIMIT_REASONS:
+            return ErrorCode.PERMISSION_DENIED
         case 400:
             return ErrorCode.INVALID_ARGUMENT
         case 401:
@@ -881,9 +926,9 @@ def _code_for_status(status: int | None) -> ErrorCode:
         case 409:
             return ErrorCode.ALREADY_EXISTS
         case _:
-            # 403, 429, 5xx, and unknown statuses are transient from the
-            # caller's point of view; retrying is safe because creates use a
-            # client id.  403 reason parsing is not implemented.
+            # Rate-limit 403s, 429, 5xx, and unknown statuses are transient from
+            # the caller's point of view; retrying is safe because creates use a
+            # client id.
             return ErrorCode.UPSTREAM_ERROR
 
 

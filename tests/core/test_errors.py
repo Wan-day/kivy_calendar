@@ -50,6 +50,7 @@ def test_only_transient_upstream_errors_are_retryable() -> None:
         ErrorCode.INVALID_STATE,
         ErrorCode.STORAGE_ERROR,
         ErrorCode.AUTH_ERROR,
+        ErrorCode.PERMISSION_DENIED,
     ]
     for code in permanent_codes:
         assert not is_retryable(Error(code))

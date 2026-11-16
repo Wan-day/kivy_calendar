@@ -21,6 +21,7 @@ class ErrorCode(StrEnum):
     STORAGE_ERROR = "storage_error"
     UPSTREAM_ERROR = "upstream_error"
     AUTH_ERROR = "auth_error"
+    PERMISSION_DENIED = "permission_denied"
 
 
 @dataclass(frozen=True, slots=True)

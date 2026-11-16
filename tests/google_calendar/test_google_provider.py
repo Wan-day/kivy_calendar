@@ -13,7 +13,7 @@ from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import pytest
-from core.errors import ErrorCode, Result
+from core.errors import ErrorCode, Result, is_retryable
 from domain.event import Event
 from google.auth.exceptions import RefreshError
 from google_calendar import google_provider
@@ -122,8 +122,11 @@ class _Response:
         self.reason = reason
 
 
-def _http_error(status: int) -> HttpError:
-    content = json.dumps({"error": {"message": f"HTTP {status}"}}).encode()
+def _http_error(status: int, reason: str | None = None) -> HttpError:
+    body: dict[str, Any] = {"message": f"HTTP {status}"}
+    if reason is not None:
+        body["errors"] = [{"reason": reason, "message": f"HTTP {status}"}]
+    content = json.dumps({"error": body}).encode()
     return HttpError(_Response(status), content, uri="https://example.test")
 
 
@@ -995,6 +998,35 @@ def test_list_deduplicates_the_same_event_across_calendars(
     ]
     assert result.value[0].calendar_id == "primary"
     assert result.value[0].summary == "Team standup"
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "expected"),
+    [
+        (403, "rateLimitExceeded", ErrorCode.UPSTREAM_ERROR),
+        (403, "userRateLimitExceeded", ErrorCode.UPSTREAM_ERROR),
+        (403, "forbidden", ErrorCode.PERMISSION_DENIED),
+        (403, "insufficientPermissions", ErrorCode.PERMISSION_DENIED),
+        (403, None, ErrorCode.PERMISSION_DENIED),
+    ],
+)
+def test_http_403_separates_rate_limits_from_permission_errors(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+    status: int,
+    reason: str | None,
+    expected: ErrorCode,
+) -> None:
+    """Only throttling 403s are retryable; permission 403s are permanent."""
+    service.events.return_value.insert.return_value.execute.side_effect = (
+        _http_error(status, reason)
+    )
+
+    result = provider.create_event(_event())
+
+    assert result.error is not None
+    assert result.error.code is expected
+    assert is_retryable(result.error) is (expected is ErrorCode.UPSTREAM_ERROR)
 
 
 @pytest.mark.parametrize(

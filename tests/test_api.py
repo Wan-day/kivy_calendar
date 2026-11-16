@@ -236,6 +236,19 @@ def test_create_event_writes_to_google_then_caches(
     assert provider.calls == [(ProviderOperation.CREATE, "event-1")]
 
 
+def test_create_event_returns_403_for_permission_errors(
+    client: TestClient,
+    provider: FakeCalendarProvider,
+) -> None:
+    """A permission failure is a permanent 403, not a retryable 503."""
+    provider.fail_next(ProviderOperation.CREATE, code=ErrorCode.PERMISSION_DENIED)
+
+    response = client.post("/events", json=_event_payload(), headers=_auth_headers())
+
+    assert response.status_code == 403
+    assert _error_code(response) == "permission_denied"
+
+
 def test_create_event_returns_upstream_error_without_caching(
     client: TestClient,
     provider: FakeCalendarProvider,
