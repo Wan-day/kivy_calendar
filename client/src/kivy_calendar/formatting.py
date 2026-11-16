@@ -2,112 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from kivy_calendar.api import CalendarEvent
 
 DEFAULT_TIME_ZONE = "Europe/Berlin"
-
-# The event form offers one fixed UTC offset per hour.  UTC-11 through UTC+12
-# covers every inhabited offset in 24 entries.
-UTC_OFFSET_HOURS: tuple[int, ...] = tuple(range(-11, 13))
-
-# Two or three representative cities per offset, so a dropdown entry is easy to
-# recognize without knowing the numeric offset by heart.
-UTC_OFFSET_CITIES: dict[int, tuple[str, ...]] = {
-    -11: ("Pago Pago", "Alofi", "Midway"),
-    -10: ("Honolulu", "Papeete", "Rarotonga"),
-    -9: ("Anchorage", "Juneau", "Nome"),
-    -8: ("Los Angeles", "Vancouver", "Tijuana"),
-    -7: ("Denver", "Calgary", "Phoenix"),
-    -6: ("Chicago", "Mexico City", "Winnipeg"),
-    -5: ("New York", "Toronto", "Bogotá"),
-    -4: ("Santiago", "Halifax", "Caracas"),
-    -3: ("São Paulo", "Buenos Aires", "Rio de Janeiro"),
-    -2: ("Fernando de Noronha", "South Georgia"),
-    -1: ("Azores", "Praia", "Ittoqqortoormiit"),
-    0: ("London", "Dublin", "Lisbon"),
-    1: ("Berlin", "Paris", "Rome"),
-    2: ("Athens", "Helsinki", "Johannesburg"),
-    3: ("Moscow", "Istanbul", "Nairobi"),
-    4: ("Dubai", "Baku", "Muscat"),
-    5: ("Karachi", "Tashkent", "Yekaterinburg"),
-    6: ("Dhaka", "Almaty", "Omsk"),
-    7: ("Bangkok", "Jakarta", "Hanoi"),
-    8: ("Beijing", "Singapore", "Perth"),
-    9: ("Tokyo", "Seoul", "Yakutsk"),
-    10: ("Brisbane", "Vladivostok", "Port Moresby"),
-    11: ("Nouméa", "Honiara", "Magadan"),
-    12: ("Suva", "Majuro", "Kamchatka"),
-}
-
-
-def utc_offset_label(hours: int) -> str:
-    """Return the dropdown label for a whole-hour UTC offset."""
-    label = f"UTC{hours:+d}"
-    cities = UTC_OFFSET_CITIES.get(hours)
-    if not cities:
-        return label
-    return f"{label} ({', '.join(cities)})"
-
-
-UTC_OFFSET_LABELS: tuple[str, ...] = tuple(
-    utc_offset_label(hours) for hours in UTC_OFFSET_HOURS
-)
-
-
-def time_zone_for_offset(hours: int) -> str:
-    """Return the IANA fixed-offset zone ``hours`` east of UTC."""
-    if hours == 0:
-        return "UTC"
-    # POSIX-style Etc zones invert the sign: Etc/GMT-1 means UTC+1.
-    return f"Etc/GMT{-hours:+d}"
-
-
-def offset_hours_for_zone(zone: str) -> int | None:
-    """Return the whole-hour offset of a fixed-offset zone, or ``None``."""
-    zero_zones = {
-        "UTC",
-        "Etc/UTC",
-        "Etc/GMT",
-        "Etc/GMT0",
-        "Etc/GMT+0",
-        "Etc/GMT-0",
-    }
-    if zone in zero_zones:
-        return 0
-    if zone.startswith("Etc/GMT"):
-        try:
-            return -int(zone[len("Etc/GMT") :])
-        except ValueError:
-            return None
-    return None
-
-
-def time_zone_label(zone: str) -> str:
-    """Return the dropdown label for ``zone``, keeping unknown zones as-is."""
-    hours = offset_hours_for_zone(zone)
-    return utc_offset_label(hours) if hours is not None else zone
-
-
-def time_zone_from_label(label: str) -> str | None:
-    """Return the IANA zone for a ``UTC+N`` label, or ``None`` when unknown."""
-    text = label.strip()
-    # Labels may carry example cities in parentheses: "UTC+1 (Berlin, ...)".
-    prefix = text.split("(", 1)[0].strip()
-    if not prefix.upper().startswith("UTC"):
-        return None
-    suffix = prefix[3:].strip()
-    if not suffix:
-        return "UTC"
-    if suffix[0] not in "+-" or not suffix[1:].isdigit():
-        return None
-    hours = int(suffix[1:])
-    offset = hours if suffix[0] == "+" else -hours
-    if offset not in UTC_OFFSET_HOURS:
-        return None
-    return time_zone_for_offset(offset)
-
 
 def default_event_times(now: datetime | None = None) -> tuple[datetime, datetime]:
     """Return the next full hour and one hour after it.
@@ -144,3 +44,32 @@ def format_event_when(event: CalendarEvent) -> str:
 def to_input_value(value: datetime) -> str:
     """Format a datetime for an ISO datetime text field."""
     return value.isoformat(timespec="minutes")
+
+
+def to_wall_clock_value(value: datetime, zone: str) -> str:
+    """Format ``value`` as wall-clock time in IANA ``zone`` without an offset."""
+    local = value.astimezone(ZoneInfo(zone))
+    return local.replace(tzinfo=None).isoformat(timespec="minutes")
+
+
+def localize_wall_clock(text: str, zone: str) -> datetime:
+    """Return the aware datetime for wall-clock ``text`` in IANA ``zone``.
+
+    The chosen zone alone decides the instant, so DST is applied correctly:
+    15:00 in Europe/Berlin is +01:00 in January and +02:00 in July.  Any UTC
+    offset typed into ``text`` is ignored.  Raises ``ValueError`` for text
+    that is not an ISO datetime, an unknown zone, or a wall-clock time that
+    does not exist in the zone (a DST gap).  Ambiguous times use the first
+    occurrence.
+    """
+    try:
+        parsed = datetime.fromisoformat(text.strip())
+        tz = ZoneInfo(zone)
+    except (ValueError, ZoneInfoNotFoundError) as error:
+        raise ValueError(str(error)) from error
+    naive = parsed.replace(tzinfo=None)
+    aware = naive.replace(tzinfo=tz)
+    if aware.astimezone(UTC).astimezone(tz).replace(tzinfo=None) != naive:
+        shown = naive.isoformat(timespec="minutes")
+        raise ValueError(f"{shown} does not exist in {zone}")
+    return aware

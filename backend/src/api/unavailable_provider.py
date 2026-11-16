@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from api.errors import ErrorCode, Result
 from domain.calendar import CalendarInfo
 from domain.event import Event
@@ -50,6 +52,10 @@ class UnavailableCalendarProvider:
         """Fail gets with an authentication error."""
         return Result.fail(ErrorCode.AUTH_ERROR, self._message)
 
-    def list_events(self) -> Result[list[Event]]:
+    def list_events(
+        self,
+        time_min: datetime | None = None,
+        time_max: datetime | None = None,
+    ) -> Result[list[Event]]:
         """Fail listings with an authentication error."""
         return Result.fail(ErrorCode.AUTH_ERROR, self._message)

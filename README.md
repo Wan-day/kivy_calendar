@@ -107,6 +107,18 @@ Failures are returned as structured JSON error bodies:
 {"error": {"code": "not_found", "message": "event was not found"}}
 ```
 
+## Running the backend with Docker
+
+```
+cp .env.example .env   # fill in the values; set BACKEND_BIND_IP to your VPN IP
+docker compose -f docker/compose.yml up -d --build
+```
+
+The port is published only on `BACKEND_BIND_IP` (default `127.0.0.1`); never
+set it to `0.0.0.0`. The container runs as an unprivileged user and the cache
+lives in the `backend_data` named volume. The bearer token travels over plain
+HTTP, so reach the backend only through the VPN or a TLS reverse proxy.
+
 ## Known limitations
 
 - All-day events are not supported yet. `list_events` skips them and `get_event`

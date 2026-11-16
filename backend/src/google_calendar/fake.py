@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Iterable
+from datetime import datetime
 
 from core.errors import Error, ErrorCode, Result
 from domain.calendar import CalendarInfo
@@ -169,13 +170,28 @@ class FakeCalendarProvider:
         event = self._events.get(event_id)
         return Result.ok(event.model_copy(deep=True) if event is not None else None)
 
-    def list_events(self) -> Result[list[Event]]:
-        """Return every stored event ordered by start time."""
+    def list_events(
+        self,
+        time_min: datetime | None = None,
+        time_max: datetime | None = None,
+    ) -> Result[list[Event]]:
+        """Return stored events ordered by start time.
+
+        Events that do not overlap ``[time_min, time_max)`` are left out when
+        a bound is given; the fake stores already-expanded events.
+        """
         self.calls.append((ProviderOperation.LIST, None))
         failure = self._take_failure(ProviderOperation.LIST)
         if failure is not None:
             return Result.fail(failure.code, failure.message)
-        return Result.ok(self.events)
+        return Result.ok(
+            [
+                event
+                for event in self.events
+                if (time_min is None or event.end > time_min)
+                and (time_max is None or event.start < time_max)
+            ]
+        )
 
     def _take_failure(self, operation: ProviderOperation) -> Error | None:
         failures = self._failures[operation]

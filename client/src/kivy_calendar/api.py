@@ -63,6 +63,14 @@ class CalendarSummary:
 
 
 @dataclass(frozen=True)
+class TimeZoneOption:
+    """A selectable IANA time zone with the backend's display label."""
+
+    name: str
+    label: str
+
+
+@dataclass(frozen=True)
 class FreeSlot:
     """A free time window suggested by the backend."""
 
@@ -117,6 +125,28 @@ class BackendClient:
                 "backend returned an unexpected calendar list",
             )
         return [self._calendar_from_payload(item) for item in payload]
+
+    def list_time_zones(self) -> list[TimeZoneOption]:
+        """Return the curated IANA time zones the backend offers."""
+        payload = self._request("/timezones", method="GET")
+        if not isinstance(payload, list):
+            raise BackendError(
+                500,
+                "invalid_response",
+                "backend returned an unexpected time zone list",
+            )
+        options: list[TimeZoneOption] = []
+        for item in payload:
+            name = str(item.get("name") or "") if isinstance(item, dict) else ""
+            if not name.strip():
+                raise BackendError(
+                    500,
+                    "invalid_response",
+                    "backend returned a time zone without a name",
+                )
+            label = str(item.get("label") or name)
+            options.append(TimeZoneOption(name=name, label=label))
+        return options
 
     def create_event(self, event: CalendarEvent) -> CalendarEvent:
         """Create an event in the backend calendar."""

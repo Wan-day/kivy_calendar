@@ -29,9 +29,13 @@ non-zero offset and no ``timeZone`` cannot be mapped to an IANA zone, so
 :meth:`GoogleCalendarProvider.list_events` skips it and
 :meth:`GoogleCalendarProvider.get_event` returns ``INVALID_EVENT``.
 
-Recurring events are expanded into one concrete event per occurrence by
-:func:`~google_calendar.recurrence.expand_event`, so repeats show up as
-separate events in the sync cache and in free-slot searches.
+Recurring events are expanded by Google itself: listing uses
+``singleEvents=True`` with ``timeMin``/``timeMax``, so every occurrence is a
+separate event with its real instance id (``<series>_<start>``) and
+``recurringEventId``.  Google applies BYDAY, EXDATE, modified and cancelled
+instances.  Editing or deleting one occurrence patches or deletes that
+instance id, which is idempotent on retry.  Events also carry Google's
+``transparency`` and whether their calendar is read-only, for free-slot search.
 
 Expected failures are mapped to :class:`~core.errors.Result` values:
 
@@ -61,7 +65,7 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -73,9 +77,11 @@ from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 from core.errors import Error, ErrorCode, Result
 from domain.calendar import CalendarInfo
 from domain.event import Event
-from google_calendar.recurrence import expand_event
 
 DEFAULT_CALENDAR_ID = "primary"
+# Default window for a full sync: some past for context, a year ahead.
+SYNC_WINDOW_PAST = timedelta(days=60)
+SYNC_WINDOW_FUTURE = timedelta(days=365)
 MAX_RESULTS = 2500
 
 _READABLE_ACCESS_ROLES = frozenset({"owner", "writer", "reader"})
@@ -122,6 +128,7 @@ class GoogleCalendarProvider:
         self._service = service
         self._calendar_id = calendar_id
         self._time_zone = time_zone
+        self._read_only_calendars: set[str] = set()
 
     @classmethod
     def from_credentials(
@@ -187,15 +194,20 @@ class GoogleCalendarProvider:
         ``patch`` only changes the fields the backend sends, so data this
         adapter does not model (location, attendees, reminders, ...) survives.
 
-        An event that carries a ``recurring_event_id`` edits one occurrence slot
-        of a recurring series through an override instead of patching the series.
+        An event that carries a ``recurring_event_id`` is one occurrence of a
+        series.  Its id is Google's real instance id, so the instance is
+        patched in place (creating an override); retrying is idempotent and
+        the series itself is untouched.
         """
         calendar_id = event.calendar_id or self._calendar_id
         if event.recurring_event_id:
+            body = _event_to_payload(event)
+            body.pop("recurringEventId", None)
             return self._event_request(
-                lambda: self._service.events().insert(
+                lambda: self._service.events().patch(
                     calendarId=calendar_id,
-                    body=_event_to_payload(event),
+                    eventId=event.id,
+                    body=body,
                 ),
                 calendar_id,
             )
@@ -305,12 +317,34 @@ class GoogleCalendarProvider:
             return Result.fail(mapped.error.code, mapped.error.message)
         return Result.ok(mapped.value)
 
-    def list_events(self) -> Result[list[Event]]:
-        """Return every event from every readable calendar.
+    def list_events(
+        self,
+        time_min: datetime | None = None,
+        time_max: datetime | None = None,
+    ) -> Result[list[Event]]:
+        """Return the events of every readable calendar inside a time window.
 
-        Google can expose the same event through more than one calendar, so
-        duplicate ids are collapsed to the first calendar that lists them.
+        Google expands recurring series (``singleEvents=True``), so each
+        occurrence is returned as its own event.  Without explicit bounds the
+        window is :data:`SYNC_WINDOW_PAST` before to :data:`SYNC_WINDOW_FUTURE`
+        after now.  Google can expose the same event through more than one
+        calendar, so duplicate ids are collapsed to the first calendar that
+        lists them.
         """
+        now = datetime.now(UTC)
+        window_start = time_min or now - SYNC_WINDOW_PAST
+        window_end = time_max or now + SYNC_WINDOW_FUTURE
+        for bound in (window_start, window_end):
+            if bound.tzinfo is None or bound.utcoffset() is None:
+                return Result.fail(
+                    ErrorCode.INVALID_ARGUMENT,
+                    "list window bounds must include time zone information",
+                )
+        if window_end <= window_start:
+            return Result.fail(
+                ErrorCode.INVALID_ARGUMENT,
+                "list window end must be after its start",
+            )
         calendars = self._calendar_ids()
         if calendars.error is not None:
             return Result.fail(calendars.error.code, calendars.error.message)
@@ -318,15 +352,16 @@ class GoogleCalendarProvider:
         events: list[Event] = []
         seen: set[str] = set()
         for calendar_id in calendars.value or []:
-            listed = self._list_calendar_events(calendar_id)
+            listed = self._list_calendar_events(
+                calendar_id, window_start, window_end
+            )
             if listed.error is not None:
                 return Result.fail(listed.error.code, listed.error.message)
             for event in listed.value or []:
-                for candidate in expand_event(event):
-                    if candidate.id in seen:
-                        continue
-                    seen.add(candidate.id)
-                    events.append(candidate)
+                if event.id in seen:
+                    continue
+                seen.add(event.id)
+                events.append(event)
         return Result.ok(events)
 
     def _calendar_ids(self) -> Result[list[str]]:
@@ -364,6 +399,8 @@ class GoogleCalendarProvider:
                     continue
                 seen.add(calendar.id)
                 entries.append(calendar)
+                if isinstance(item, dict) and item.get("accessRole") == "reader":
+                    self._read_only_calendars.add(calendar.id)
 
             page_token = _next_page_token(response.value)
             if page_token is None:
@@ -383,15 +420,22 @@ class GoogleCalendarProvider:
             )
         return Result.ok(entries)
 
-    def _list_calendar_events(self, calendar_id: str) -> Result[list[Event]]:
-        """Return every timed event in one calendar, following pagination."""
+    def _list_calendar_events(
+        self,
+        calendar_id: str,
+        time_min: datetime,
+        time_max: datetime,
+    ) -> Result[list[Event]]:
+        """Return the expanded events of one calendar window, paginated."""
         events: list[Event] = []
         page_token: str | None = None
         while True:
             query: dict[str, Any] = {
                 "calendarId": calendar_id,
                 "maxResults": MAX_RESULTS,
-                "singleEvents": False,
+                "singleEvents": True,
+                "timeMin": _rfc3339(time_min),
+                "timeMax": _rfc3339(time_max),
                 "showDeleted": False,
             }
             if page_token is not None:
@@ -406,13 +450,22 @@ class GoogleCalendarProvider:
             if items.error is not None:
                 return Result.fail(items.error.code, items.error.message)
             for item in items.value or []:
+                if isinstance(item, dict) and item.get("status") == "cancelled":
+                    continue
                 mapped = _event_from_resource(item, calendar_id, self._time_zone)
                 if mapped.error is not None:
                     # One unmappable entry (an all-day event or an offset-only
                     # event without an IANA zone) must not abort the whole sync.
                     continue
                 if mapped.value is not None:
-                    events.append(mapped.value)
+                    events.append(
+                        mapped.value.model_copy(
+                            update={
+                                "calendar_read_only": calendar_id
+                                in self._read_only_calendars
+                            }
+                        )
+                    )
 
             page_token = _next_page_token(response.value)
             if page_token is None:
@@ -451,6 +504,11 @@ class GoogleCalendarProvider:
             failure = _error_from_exception(exc)
             return Result.fail(failure.code, failure.message)
         return Result.ok(response)
+
+
+def _rfc3339(moment: datetime) -> str:
+    """Return ``moment`` as the UTC RFC 3339 string Google expects."""
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _event_id_error(event_id: str) -> Error | None:
@@ -572,6 +630,7 @@ def _all_day_event(
                 calendar_id=calendar_id,
                 recurring_event_id=recurring_event_id,
                 all_day=True,
+                transparent=raw.get("transparency") == "transparent",
                 summary=str(raw.get("summary") or ""),
                 description=(
                     str(raw["description"])
@@ -690,6 +749,7 @@ def _event_from_resource(
                 id=event_id,
                 calendar_id=calendar_id,
                 recurring_event_id=recurring_event_id,
+                transparent=raw.get("transparency") == "transparent",
                 summary=summary,
                 description=description,
                 start=start_time,

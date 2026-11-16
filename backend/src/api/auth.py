@@ -28,5 +28,7 @@ def verify_api_key(
     scheme, _, token = (authorization or "").partition(" ")
     if scheme.lower() != BEARER_SCHEME or not token:
         raise ApiError(401, ErrorCode.AUTH_ERROR, "missing bearer token")
-    if not secrets.compare_digest(token, settings.backend_api_token):
+    if not secrets.compare_digest(
+        token.encode(), settings.backend_api_token.encode()
+    ):
         raise ApiError(401, ErrorCode.AUTH_ERROR, "invalid bearer token")

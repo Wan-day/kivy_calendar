@@ -20,6 +20,7 @@ from cache.repository import EventRepository
 from core.errors import ErrorCode
 from domain.calendar import CalendarInfo
 from domain.event import Event
+from domain.timezones import TimeZoneOption, list_time_zones
 from google_calendar.provider import CalendarProvider
 from slots.service import SlotService
 from sync.service import SyncService
@@ -58,6 +59,16 @@ def list_calendars(
             raise RuntimeError("list calendars failed without an error")
         raise ApiError(error_status(error), error.code, error.message)
     return list(result.value or [])
+
+
+@api_router.get(
+    "/timezones",
+    response_model=list[TimeZoneOption],
+    dependencies=[Depends(verify_api_key)],
+)
+def get_time_zones() -> list[TimeZoneOption]:
+    """List curated IANA time zones with labels and current UTC offsets."""
+    return list_time_zones()
 
 
 @api_router.get(

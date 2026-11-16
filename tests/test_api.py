@@ -171,6 +171,24 @@ def test_health_returns_ok(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_timezones_endpoint_lists_iana_zones(client: TestClient) -> None:
+    """The timezones endpoint returns valid zones with labels and offsets."""
+    response = client.get("/timezones", headers=_auth_headers())
+
+    assert response.status_code == 200
+    zones = {item["name"]: item for item in response.json()}
+    for name in zones:
+        ZoneInfo(name)
+    assert zones["Europe/Berlin"]["label"].startswith("Berlin (UTC+0")
+    assert zones["Asia/Kolkata"]["utc_offset_minutes"] == 330
+    assert zones["Pacific/Kiritimati"]["utc_offset_minutes"] == 840
+
+
+def test_timezones_endpoint_requires_auth(client: TestClient) -> None:
+    """The timezones endpoint rejects unauthenticated requests."""
+    assert client.get("/timezones").status_code in (401, 403)
+
+
 def test_calendars_endpoint_lists_the_account_calendars(
     repository: EventRepository,
     retry_queue: RetryQueue,
@@ -222,6 +240,40 @@ def test_protected_endpoints_reject_an_invalid_bearer_token(client: TestClient) 
 
     assert response.status_code == 401
     assert _error_code(response) == "auth_error"
+
+
+def test_non_ascii_bearer_token_is_rejected_with_401(client: TestClient) -> None:
+    """A non-ASCII token must yield a 401, not a server error."""
+    response = client.get(
+        "/events", headers={"Authorization": "Bearer töken".encode()}
+    )
+
+    assert response.status_code == 401
+    assert _error_code(response) == "auth_error"
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_interactive_docs_are_disabled(client: TestClient, path: str) -> None:
+    """The unauthenticated docs and schema pages are not served."""
+    assert client.get(path).status_code == 404
+
+
+def test_upstream_error_detail_is_not_returned_to_clients(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """Upstream detail is replaced by a generic message per error code."""
+    provider = FakeCalendarProvider()
+    leak = "https://www.googleapis.com/x /data/kivy_calendar.db"
+    provider.fail_next("list_calendars", message=leak)
+    client = _make_client(provider, repository, retry_queue)
+
+    response = client.get("/calendars", headers=_auth_headers())
+
+    assert response.status_code == 503
+    assert response.json()["error"]["message"] == "calendar service unavailable"
+    assert "googleapis" not in response.text
+    assert "kivy_calendar.db" not in response.text
 
 
 def test_create_event_writes_to_google_then_caches(

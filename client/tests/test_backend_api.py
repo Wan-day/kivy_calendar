@@ -18,6 +18,7 @@ from kivy_calendar.api import (
     CalendarEvent,
     CalendarSummary,
     FreeSlot,
+    TimeZoneOption,
 )
 
 BASE_URL = "http://backend.test"
@@ -116,6 +117,50 @@ def test_list_calendars_rejects_a_payload_without_an_id(
 
     with pytest.raises(BackendError) as error_info:
         _client().list_calendars()
+
+    assert error_info.value.code == "invalid_response"
+
+
+def test_list_time_zones_returns_backend_zones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The client maps the /timezones payload into zone options."""
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(
+        request: urllib.request.Request,
+        timeout: float = 0,
+    ) -> _FakeResponse:
+        captured["url"] = str(request.full_url)
+        return _FakeResponse(
+            [
+                {
+                    "name": "Asia/Kolkata",
+                    "label": "Kolkata (UTC+05:30)",
+                    "utc_offset_minutes": 330,
+                }
+            ]
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    zones = _client().list_time_zones()
+
+    assert str(captured["url"]).endswith("/timezones")
+    assert zones == [TimeZoneOption(name="Asia/Kolkata", label="Kolkata (UTC+05:30)")]
+
+
+def test_list_time_zones_rejects_a_zone_without_a_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed zone entry is reported as an invalid response."""
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout=0: _FakeResponse([{"label": "x"}]),
+    )
+
+    with pytest.raises(BackendError) as error_info:
+        _client().list_time_zones()
 
     assert error_info.value.code == "invalid_response"
 

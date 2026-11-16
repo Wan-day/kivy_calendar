@@ -1,0 +1,19 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    env_file:
+      - ../.env
+    environment:
+      # Always use the in-container path; the named volume is mounted here.
+      KIVY_CALENDAR_DB_PATH: /data/kivy_calendar.db
+    ports:
+      # Publish on one host IP only. Never set BACKEND_BIND_IP to 0.0.0.0.
+      - "${BACKEND_BIND_IP:-127.0.0.1}:8000:8000"
+    volumes:
+      - backend_data:/data
+    restart: unless-stopped
+
+volumes:
+  backend_data:
