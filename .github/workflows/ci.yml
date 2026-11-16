@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint
@@ -60,6 +63,31 @@ jobs:
 
       - name: Run tests
         run: pytest
+
+  client-test:
+    name: Client test
+    runs-on: ubuntu-latest
+    env:
+      KIVY_NO_ARGS: "1"
+      KIVY_NO_CONSOLELOG: "1"
+      SDL_VIDEODRIVER: dummy
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install system libraries for headless Kivy
+        run: sudo apt-get update && sudo apt-get install -y libgl1 libmtdev1t64
+
+      - name: Install client and test dependencies
+        run: python -m pip install ./client pytest
+
+      - name: Run client tests
+        run: cd client && pytest
 
   docker:
     name: Docker build
