@@ -171,6 +171,24 @@ def test_health_returns_ok(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_timezones_endpoint_lists_iana_zones(client: TestClient) -> None:
+    """The timezones endpoint returns valid zones with labels and offsets."""
+    response = client.get("/timezones", headers=_auth_headers())
+
+    assert response.status_code == 200
+    zones = {item["name"]: item for item in response.json()}
+    for name in zones:
+        ZoneInfo(name)
+    assert zones["Europe/Berlin"]["label"].startswith("Berlin (UTC+0")
+    assert zones["Asia/Kolkata"]["utc_offset_minutes"] == 330
+    assert zones["Pacific/Kiritimati"]["utc_offset_minutes"] == 840
+
+
+def test_timezones_endpoint_requires_auth(client: TestClient) -> None:
+    """The timezones endpoint rejects unauthenticated requests."""
+    assert client.get("/timezones").status_code in (401, 403)
+
+
 def test_calendars_endpoint_lists_the_account_calendars(
     repository: EventRepository,
     retry_queue: RetryQueue,

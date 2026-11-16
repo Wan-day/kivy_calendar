@@ -5,18 +5,15 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from kivy_calendar.api import CalendarEvent
 from kivy_calendar.formatting import (
-    UTC_OFFSET_CITIES,
-    UTC_OFFSET_HOURS,
-    UTC_OFFSET_LABELS,
     default_event_times,
     format_event_when,
-    time_zone_for_offset,
-    time_zone_from_label,
-    time_zone_label,
+    localize_wall_clock,
     to_input_value,
-    utc_offset_label,
+    to_wall_clock_value,
 )
 
 BERLIN = ZoneInfo("Europe/Berlin")
@@ -81,52 +78,6 @@ def test_to_input_value_keeps_minute_precision() -> None:
     assert to_input_value(value) == "2026-11-09T14:20+01:00"
 
 
-def test_utc_offset_labels_cover_24_hours() -> None:
-    """The dropdown offers one UTC offset per hour, from -11 to +12."""
-    assert len(UTC_OFFSET_LABELS) == 24
-    assert UTC_OFFSET_LABELS[0].startswith("UTC-11 ")
-    assert UTC_OFFSET_LABELS[-1].startswith("UTC+12 ")
-    assert any(label.startswith("UTC+0 ") for label in UTC_OFFSET_LABELS)
-
-
-def test_utc_offset_labels_name_two_or_three_cities() -> None:
-    """Every label lists representative cities next to its offset."""
-    for hours, label in zip(UTC_OFFSET_HOURS, UTC_OFFSET_LABELS, strict=True):
-        cities = UTC_OFFSET_CITIES[hours]
-        assert 2 <= len(cities) <= 3
-        assert label == f"UTC{hours:+d} ({', '.join(cities)})"
-    assert "Berlin" in utc_offset_label(1)
-    assert "Tokyo" in utc_offset_label(9)
-
-
-def test_time_zone_for_offset_uses_iana_fixed_offsets() -> None:
-    """Labels map to real IANA fixed-offset zones."""
-    assert time_zone_for_offset(0) == "UTC"
-    assert time_zone_for_offset(1) == "Etc/GMT-1"
-    assert time_zone_for_offset(-3) == "Etc/GMT+3"
-
-
-def test_time_zone_labels_round_trip() -> None:
-    """Every dropdown label maps to a zone and back to the same label."""
-    for label in UTC_OFFSET_LABELS:
-        zone = time_zone_from_label(label)
-        assert zone is not None
-        assert time_zone_label(zone) == label
-
-
-def test_time_zone_label_keeps_city_zones() -> None:
-    """Named zones stay untouched and unknown labels are rejected."""
-    assert time_zone_label("Europe/Berlin") == "Europe/Berlin"
-    assert time_zone_from_label("Europe/Berlin") is None
-    assert time_zone_from_label("UTC+99") is None
-
-
-def test_time_zone_from_label_ignores_the_city_names() -> None:
-    """City names after the offset do not affect the parsed zone."""
-    assert time_zone_from_label("UTC+1 (Berlin, Paris, Rome)") == "Etc/GMT-1"
-    assert time_zone_from_label("UTC-5 (New York, Toronto, Bogotá)") == "Etc/GMT+5"
-
-
 def test_format_event_when_shows_a_single_all_day_date() -> None:
     """A one-day all-day event is shown as just its date."""
     event = _event(
@@ -147,3 +98,44 @@ def test_format_event_when_shows_a_multi_day_all_day_span() -> None:
     )
 
     assert format_event_when(event) == "06 Nov 2026 – 08 Nov 2026"
+
+
+def test_localize_wall_clock_follows_daylight_saving_time() -> None:
+    """15:00 Europe/Berlin is +01:00 in January and +02:00 in July."""
+    winter = localize_wall_clock("2026-01-15T15:00", "Europe/Berlin")
+    summer = localize_wall_clock("2026-07-15T15:00", "Europe/Berlin")
+
+    assert winter.isoformat() == "2026-01-15T15:00:00+01:00"
+    assert summer.isoformat() == "2026-07-15T15:00:00+02:00"
+    assert winter.tzinfo == BERLIN
+
+
+def test_localize_wall_clock_supports_half_hour_zones() -> None:
+    """Half-hour zones such as India keep their real offset."""
+    value = localize_wall_clock("2026-11-09T15:00", "Asia/Kolkata")
+
+    assert value.isoformat() == "2026-11-09T15:00:00+05:30"
+
+
+def test_localize_wall_clock_ignores_a_typed_offset() -> None:
+    """Only the chosen zone decides the instant."""
+    value = localize_wall_clock("2026-11-09T15:00+01:00", "America/New_York")
+
+    assert value.isoformat() == "2026-11-09T15:00:00-05:00"
+
+
+def test_localize_wall_clock_rejects_bad_input() -> None:
+    """Garbage, unknown zones and DST gaps raise ValueError."""
+    with pytest.raises(ValueError):
+        localize_wall_clock("nope", "Europe/Berlin")
+    with pytest.raises(ValueError):
+        localize_wall_clock("2026-11-09T15:00", "Mars/Olympus")
+    with pytest.raises(ValueError):
+        localize_wall_clock("2026-03-29T02:30", "Europe/Berlin")
+
+
+def test_to_wall_clock_value_converts_into_the_zone() -> None:
+    """The instant is shown as wall-clock time in the given zone."""
+    value = datetime(2026, 7, 15, 13, 0, tzinfo=ZoneInfo("UTC"))
+
+    assert to_wall_clock_value(value, "Europe/Berlin") == "2026-07-15T15:00"
