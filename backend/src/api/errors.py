@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from core.errors import Error, ErrorCode, Result
+
+logger = logging.getLogger(__name__)
 
 _ERROR_STATUS: dict[ErrorCode, int] = {
     ErrorCode.INVALID_ARGUMENT: 400,
@@ -16,6 +20,19 @@ _ERROR_STATUS: dict[ErrorCode, int] = {
     ErrorCode.STORAGE_ERROR: 500,
     ErrorCode.UPSTREAM_ERROR: 503,
     ErrorCode.AUTH_ERROR: 401,
+}
+
+# Client-facing messages. Detail from upstream/storage errors (Google error
+# bodies, URLs, file paths) is logged server-side and never returned.
+_GENERIC_MESSAGE: dict[ErrorCode, str] = {
+    ErrorCode.INVALID_ARGUMENT: "invalid request",
+    ErrorCode.INVALID_EVENT: "invalid event",
+    ErrorCode.NOT_FOUND: "not found",
+    ErrorCode.ALREADY_EXISTS: "already exists",
+    ErrorCode.INVALID_STATE: "request conflicts with the current state",
+    ErrorCode.STORAGE_ERROR: "internal storage error",
+    ErrorCode.UPSTREAM_ERROR: "calendar service unavailable",
+    ErrorCode.AUTH_ERROR: "authentication failed",
 }
 
 
@@ -47,8 +64,25 @@ def ensure_ok[T](result: Result[T], status_code: int | None = None) -> None:
 
 
 def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
-    """Return a structured JSON error response for :class:`ApiError`."""
+    """Return a structured JSON error response for :class:`ApiError`.
+
+    The response carries a generic message for the error code; the original
+    detail is logged server-side only.
+    """
+    logger.warning(
+        "api error %s (%d) on %s %s: %s",
+        exc.code.value,
+        exc.status_code,
+        request.method,
+        request.url.path,
+        exc.message,
+    )
     return JSONResponse(
         status_code=exc.status_code,
-        content={"error": {"code": exc.code.value, "message": exc.message}},
+        content={
+            "error": {
+                "code": exc.code.value,
+                "message": _GENERIC_MESSAGE[exc.code],
+            }
+        },
     )

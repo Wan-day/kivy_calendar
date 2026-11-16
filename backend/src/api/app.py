@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 
 from api.auth import verify_api_key  # noqa: F401 - registered on routes
 from api.deps import (  # noqa: F401 - used by route dependencies
@@ -14,7 +13,7 @@ from api.deps import (  # noqa: F401 - used by route dependencies
     get_retry_queue,
     get_sync_service,
 )
-from api.errors import ApiError
+from api.errors import ApiError, api_error_handler
 from api.router import api_router
 from api.unavailable_provider import UnavailableCalendarProvider
 from cache.repository import EventRepository
@@ -72,7 +71,12 @@ def create_app(
     explicit arguments.
     """
     resolved_settings = settings or get_settings()
-    app = FastAPI(title="Kivy Calendar Backend")
+    app = FastAPI(
+        title="Kivy Calendar Backend",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
 
     if provider is None:
         provider = _build_default_provider(resolved_settings)
@@ -98,11 +102,6 @@ def create_app(
 
     app.include_router(api_router)
 
-    @app.exception_handler(ApiError)
-    async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={"error": {"code": exc.code.value, "message": exc.message}},
-        )
+    app.add_exception_handler(ApiError, api_error_handler)  # type: ignore[arg-type]
 
     return app

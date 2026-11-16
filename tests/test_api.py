@@ -224,6 +224,40 @@ def test_protected_endpoints_reject_an_invalid_bearer_token(client: TestClient) 
     assert _error_code(response) == "auth_error"
 
 
+def test_non_ascii_bearer_token_is_rejected_with_401(client: TestClient) -> None:
+    """A non-ASCII token must yield a 401, not a server error."""
+    response = client.get(
+        "/events", headers={"Authorization": "Bearer töken".encode()}
+    )
+
+    assert response.status_code == 401
+    assert _error_code(response) == "auth_error"
+
+
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+def test_interactive_docs_are_disabled(client: TestClient, path: str) -> None:
+    """The unauthenticated docs and schema pages are not served."""
+    assert client.get(path).status_code == 404
+
+
+def test_upstream_error_detail_is_not_returned_to_clients(
+    repository: EventRepository,
+    retry_queue: RetryQueue,
+) -> None:
+    """Upstream detail is replaced by a generic message per error code."""
+    provider = FakeCalendarProvider()
+    leak = "https://www.googleapis.com/x /data/kivy_calendar.db"
+    provider.fail_next("list_calendars", message=leak)
+    client = _make_client(provider, repository, retry_queue)
+
+    response = client.get("/calendars", headers=_auth_headers())
+
+    assert response.status_code == 503
+    assert response.json()["error"]["message"] == "calendar service unavailable"
+    assert "googleapis" not in response.text
+    assert "kivy_calendar.db" not in response.text
+
+
 def test_create_event_writes_to_google_then_caches(
     client: TestClient,
     provider: FakeCalendarProvider,
