@@ -124,6 +124,7 @@ class GoogleCalendarProvider:
         self._service = service
         self._calendar_id = calendar_id
         self._time_zone = time_zone
+        self._primary_id: str | None = None
 
     @classmethod
     def from_credentials(
@@ -163,7 +164,7 @@ class GoogleCalendarProvider:
         slot of a recurring series, so the Google insert creates or replaces that
         override instead of creating a standalone event.
         """
-        calendar_id = event.calendar_id or self._calendar_id
+        calendar_id = self._resolve(event.calendar_id or self._calendar_id)
         if event.recurring_event_id:
             return self._event_request(
                 lambda: self._service.events().insert(
@@ -192,7 +193,7 @@ class GoogleCalendarProvider:
         An event that carries a ``recurring_event_id`` edits one occurrence slot
         of a recurring series through an override instead of patching the series.
         """
-        calendar_id = event.calendar_id or self._calendar_id
+        calendar_id = self._resolve(event.calendar_id or self._calendar_id)
         if event.recurring_event_id:
             return self._event_request(
                 lambda: self._service.events().insert(
@@ -224,8 +225,8 @@ class GoogleCalendarProvider:
         Google treats a calendar as part of an event's identity, so a move is a
         dedicated operation rather than a field change on ``patch``.
         """
-        source = calendar_id or self._calendar_id
-        destination = destination_calendar_id or self._calendar_id
+        source = self._resolve(calendar_id or self._calendar_id)
+        destination = self._resolve(destination_calendar_id or self._calendar_id)
         if not destination.strip():
             return Result.fail(
                 ErrorCode.INVALID_ARGUMENT,
@@ -279,7 +280,7 @@ class GoogleCalendarProvider:
 
     def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:
         """Delete the upstream event, reporting a missing event as an error."""
-        target = calendar_id or self._calendar_id
+        target = self._resolve(calendar_id or self._calendar_id)
         response = self._execute(
             lambda: self._service.events().delete(
                 calendarId=target,
@@ -296,7 +297,7 @@ class GoogleCalendarProvider:
         event_id: str,
     ) -> Result[Event | None]:
         """Return the upstream event, or ``None`` when Google does not have it."""
-        target = calendar_id or self._calendar_id
+        target = self._resolve(calendar_id or self._calendar_id)
         response = self._execute(
             lambda: self._service.events().get(
                 calendarId=target,
@@ -342,11 +343,33 @@ class GoogleCalendarProvider:
         entries = self._calendar_entries()
         if entries.error is not None:
             return Result.fail(entries.error.code, entries.error.message)
-        calendar_ids = [self._calendar_id]
+        calendar_ids = [self._resolve(self._calendar_id)]
         for calendar in entries.value or []:
             if calendar.id not in calendar_ids:
                 calendar_ids.append(calendar.id)
         return Result.ok(calendar_ids)
+
+    def _resolve(self, calendar_id: str) -> str:
+        """Return the real id behind the ``primary`` alias, once per provider.
+
+        Google accepts ``primary`` as an alias but reports the account's own
+        calendar under its real id (usually an email address).  Using one id
+        everywhere keeps cached events and the calendar dropdown consistent.
+        A lookup failure keeps the alias and is retried on the next call.
+        """
+        if calendar_id != DEFAULT_CALENDAR_ID:
+            return calendar_id
+        if self._primary_id is None:
+            response = self._execute(
+                lambda: self._service.calendarList().get(
+                    calendarId=DEFAULT_CALENDAR_ID
+                )
+            )
+            raw = response.value
+            real = raw.get("id") if isinstance(raw, dict) else None
+            if isinstance(real, str) and real.strip():
+                self._primary_id = real
+        return self._primary_id or calendar_id
 
     def _calendar_entries(self) -> Result[list[CalendarInfo]]:
         """Return readable calendars from Google's calendar list, paginated."""
@@ -372,6 +395,8 @@ class GoogleCalendarProvider:
                     continue
                 seen.add(calendar.id)
                 entries.append(calendar)
+                if calendar.primary:
+                    self._primary_id = calendar.id
 
             page_token = _next_page_token(response.value)
             if page_token is None:

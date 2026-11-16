@@ -1292,3 +1292,74 @@ def test_list_maps_multi_day_all_day_event(
     assert event.all_day is True
     assert event.start.date().isoformat() == "2026-11-06"
     assert event.end.date().isoformat() == "2026-11-10"
+
+
+def _primary_email_service(service: Mock) -> None:
+    """Make Google report the primary calendar under its email id."""
+    service.calendarList.return_value.list.return_value.execute.return_value = (
+        _calendar_list(
+            _calendar_item("me@example.com", summary="me@example.com", primary=True)
+        )
+    )
+    service.calendarList.return_value.get.return_value.execute.return_value = {
+        "id": "me@example.com"
+    }
+
+
+def test_primary_alias_is_resolved_to_the_real_id_for_listing(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """Listed events carry the same id the calendar dropdown offers."""
+    _primary_email_service(service)
+    service.events.return_value.list.return_value.execute.return_value = {
+        "items": [_resource("event1", recurrence=None)]
+    }
+
+    events = provider.list_events()
+    calendars = provider.list_calendars()
+
+    assert events.value is not None
+    assert {event.calendar_id for event in events.value} == {"me@example.com"}
+    assert calendars.value is not None
+    assert [calendar.id for calendar in calendars.value] == ["me@example.com"]
+    called = [
+        call.kwargs["calendarId"]
+        for call in service.events.return_value.list.call_args_list
+    ]
+    assert called == ["me@example.com"]
+
+
+def test_primary_alias_is_resolved_once_for_writes(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A blank calendar id writes to the real primary id, looked up once."""
+    _primary_email_service(service)
+    insert = service.events.return_value.insert
+    insert.return_value.execute.return_value = _resource()
+
+    first = provider.create_event(_event())
+    provider.create_event(_event())
+
+    assert first.value is not None
+    assert first.value.calendar_id == "me@example.com"
+    assert insert.call_args.kwargs["calendarId"] == "me@example.com"
+    service.calendarList.return_value.get.assert_called_once()
+
+
+def test_primary_alias_falls_back_when_the_lookup_fails(
+    provider: GoogleCalendarProvider,
+    service: Mock,
+) -> None:
+    """A failed lookup keeps using the alias instead of failing the write."""
+    service.calendarList.return_value.get.return_value.execute.side_effect = (
+        _http_error(403)
+    )
+    insert = service.events.return_value.insert
+    insert.return_value.execute.return_value = _resource()
+
+    result = provider.create_event(_event())
+
+    assert result.is_ok
+    assert insert.call_args.kwargs["calendarId"] == "primary"
