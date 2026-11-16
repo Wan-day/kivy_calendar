@@ -33,6 +33,7 @@ from kivy_calendar.formatting import (
     localize_wall_clock,
     to_wall_clock_value,
 )
+from kivy_calendar.screens.time_picker import DateTimeField
 from kivy_calendar.screens.ui import wrapped_label
 
 ERROR_COLOR = (0.95, 0.42, 0.42, 1)
@@ -143,8 +144,9 @@ class AddEventScreen(Screen):
             size_hint_y=None,
             height=44,
         )
-        self.start = _input("")
-        self.end = _input("")
+        self.start = DateTimeField()
+        self.end = DateTimeField()
+        self.start.on_user_change = self._keep_duration_after_start_change
         self.start_timezone = _time_zone_spinner(self.time_zone)
         self.end_timezone = _time_zone_spinner(self.time_zone)
         self.description = _input("Optional notes", height=88, multiline=True)
@@ -179,10 +181,10 @@ class AddEventScreen(Screen):
         form.add_widget(all_day_row)
 
         self._start_field, self._start_label = _field_with_label(
-            "Start (local time, 2026-11-09T14:00)", self.start
+            "Start (date and local time)", self.start
         )
         self._end_field, self._end_label = _field_with_label(
-            "End (local time, 2026-11-09T16:00)", self.end
+            "End (date and local time)", self.end
         )
         form.add_widget(self._start_field)
         form.add_widget(self._end_field)
@@ -496,6 +498,43 @@ class AddEventScreen(Screen):
             return 60
         return max(1, int(difference.total_seconds() // 60))
 
+    def _keep_duration_after_start_change(self, previous_start: str) -> None:
+        """Move the end with a changed start so the duration stays put."""
+        if self.all_day.active:
+            self._keep_day_span_after_start_change(previous_start)
+            return
+        start_zone = self._resolved_time_zone(self.start_timezone.text)
+        end_zone = self._resolved_time_zone(self.end_timezone.text)
+        try:
+            new_start = localize_wall_clock(self.start.text, start_zone)
+        except (TypeError, ValueError, ZoneInfoNotFoundError):
+            return
+        try:
+            duration = localize_wall_clock(
+                self.end.text, end_zone
+            ) - localize_wall_clock(previous_start, start_zone)
+        except (TypeError, ValueError, ZoneInfoNotFoundError):
+            duration = timedelta(hours=1)
+        if duration <= timedelta(0):
+            duration = timedelta(hours=1)
+        self.end.text = self._wall_clock(new_start + duration, end_zone)
+
+    def _keep_day_span_after_start_change(self, previous_start: str) -> None:
+        """Move an all-day end date by as many days as the start moved."""
+        try:
+            new_start = date.fromisoformat(self.start.text)
+        except ValueError:
+            return
+        try:
+            span = date.fromisoformat(self.end.text) - date.fromisoformat(
+                previous_start
+            )
+        except ValueError:
+            span = timedelta(0)
+        if span < timedelta(0):
+            span = timedelta(0)
+        self.end.text = (new_start + span).isoformat()
+
     def _find_free_slots(
         self,
         client: BackendClient,
@@ -556,16 +595,14 @@ class AddEventScreen(Screen):
 
     def _apply_all_day_mode(self, all_day: bool) -> None:
         """Update field hints and captions for the chosen event kind."""
+        self.start.show_time = not all_day
+        self.end.show_time = not all_day
         if all_day:
-            self.start.hint_text = "2026-11-09"
-            self.end.hint_text = "2026-11-09"
             self._start_label.text = "Start date (YYYY-MM-DD)"
             self._end_label.text = "End date (YYYY-MM-DD, inclusive)"
         else:
-            self.start.hint_text = ""
-            self.end.hint_text = ""
-            self._start_label.text = "Start (local time, 2026-11-09T14:00)"
-            self._end_label.text = "End (local time, 2026-11-09T16:00)"
+            self._start_label.text = "Start (date and local time)"
+            self._end_label.text = "End (date and local time)"
         self.suggest_button.disabled = all_day or self.save_button.disabled
 
     def confirm_delete(self, *args: Any) -> None:
@@ -712,7 +749,8 @@ class AddEventScreen(Screen):
                 end = localize_wall_clock(self.end.text, end_timezone)
             except ValueError as error:
                 self._set_status(
-                    f"Use local times such as 2026-11-09T14:00 ({error}).",
+                    "Use local times: a date such as 2026-11-09 and a time "
+                    f"from the list ({error}).",
                     error=True,
                 )
                 return None

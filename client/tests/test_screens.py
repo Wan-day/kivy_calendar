@@ -900,3 +900,222 @@ def test_each_new_form_gets_a_fresh_id_and_success_resets_it(
     assert second is not None
     assert second.id != first.id
     assert client.created[0].id == first.id
+
+
+def test_time_picker_offers_hours_then_five_minute_steps() -> None:
+    """The time list starts with hours and then the minutes of that hour."""
+    from kivy_calendar.screens.time_picker import hour_choices, minute_choices
+
+    assert hour_choices() == [f"{hour:02d}" for hour in range(24)]
+    assert minute_choices(9) == [
+        "09:00",
+        "09:05",
+        "09:10",
+        "09:15",
+        "09:20",
+        "09:25",
+        "09:30",
+        "09:35",
+        "09:40",
+        "09:45",
+        "09:50",
+        "09:55",
+    ]
+
+
+def test_picking_an_hour_then_minutes_sets_the_event_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Choosing 09 and then 09:35 saves 09:35 in the selected zone."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+    add_event_screen.end.text = "2026-11-09T16:00"
+
+    add_event_screen.start.open_hour_picker()
+    assert add_event_screen.start.choices == [f"{hour:02d}" for hour in range(24)]
+    add_event_screen.start.select_hour(9)
+    assert add_event_screen.start.choices[0] == "09:00"
+    assert add_event_screen.start.choices[-1] == "09:55"
+    add_event_screen.start.select_time("09:35")
+
+    assert add_event_screen.start.choices == []
+    assert add_event_screen.start.time_button.text == "09:35"
+    assert add_event_screen.start.text == "2026-11-09T09:35"
+    event = add_event_screen._build_event()
+    assert event is not None
+    assert event.start.isoformat() == "2026-11-09T09:35:00+01:00"
+
+
+def test_all_day_hides_the_time_picker_and_keeps_only_the_date() -> None:
+    """All-day events use just the date; timed events get the picker back."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+
+    add_event_screen.all_day.active = True
+
+    assert add_event_screen.start.time_button.parent is None
+    assert add_event_screen.start.text == "2026-11-09"
+
+    add_event_screen.all_day.active = False
+
+    assert add_event_screen.start.time_button.parent is add_event_screen.start
+    assert "T" in add_event_screen.start.text
+
+
+def test_editing_keeps_a_time_that_is_not_on_a_five_minute_step() -> None:
+    """An event at 14:03 keeps that time until the user picks another."""
+    from kivy_calendar.api import CalendarEvent
+
+    _, _, add_event_screen = _make_screens(FakeClient())
+    event = CalendarEvent(
+        id="evt",
+        summary="Odd start",
+        start=datetime(2026, 11, 9, 14, 3, tzinfo=BERLIN),
+        end=datetime(2026, 11, 9, 15, 0, tzinfo=BERLIN),
+        start_timezone="Europe/Berlin",
+        end_timezone="Europe/Berlin",
+    )
+
+    add_event_screen.open_for(event)
+
+    assert add_event_screen.start.time_button.text == "14:03"
+    built = add_event_screen._build_event()
+    assert built is not None
+    assert built.start == event.start
+
+
+def test_picking_a_start_time_moves_the_end_and_keeps_the_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 90-minute event moved to 14:25 now ends at 15:55."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T01:00"
+    add_event_screen.end.text = "2026-11-09T02:30"
+
+    add_event_screen.start.select_hour(14)
+    add_event_screen.start.select_time("14:25")
+
+    assert add_event_screen.end.text == "2026-11-09T15:55"
+    event = add_event_screen._build_event()
+    assert event is not None
+    assert event.end - event.start == timedelta(minutes=90)
+
+
+def test_picking_a_start_time_after_an_invalid_end_uses_one_hour(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without a usable duration the end falls one hour after the start."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+    add_event_screen.end.text = "2026-11-09T14:00"
+
+    add_event_screen.start.select_time("16:10")
+
+    assert add_event_screen.end.text == "2026-11-09T17:10"
+
+
+def test_picking_an_end_time_leaves_the_start_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the start drives the end; changing the end never moves the start."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+    add_event_screen.end.text = "2026-11-09T16:00"
+
+    add_event_screen.end.select_time("17:30")
+
+    assert add_event_screen.start.text == "2026-11-09T15:00"
+    assert add_event_screen.end.text == "2026-11-09T17:30"
+
+
+def test_time_lists_open_at_the_current_hour_and_minute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hour list starts at the set hour; the minutes at the set minute."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+    field = add_event_screen.start
+    field.text = "2026-11-09T14:27"
+
+    field.open_hour_picker()
+    assert field.selected_choice == "14"
+
+    field.select_hour(14)
+    assert field.selected_choice == "14:25"
+
+    field.select_hour(9)
+    assert field.selected_choice == ""
+
+
+def test_typing_a_new_start_date_moves_the_end_date() -> None:
+    """Typing 2026-11-12 as the start date keeps 15:00-16:30 on that day."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+    add_event_screen.end.text = "2026-11-09T16:30"
+
+    add_event_screen.start.date_input.text = "2026-11-12"
+
+    assert add_event_screen.start.text == "2026-11-12T15:00"
+    assert add_event_screen.end.text == "2026-11-12T16:30"
+
+
+def test_an_overnight_event_keeps_its_length_when_the_date_changes() -> None:
+    """22:00 to 01:00 next day still ends the morning after the new date."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T22:00"
+    add_event_screen.end.text = "2026-11-10T01:00"
+
+    add_event_screen.start.date_input.text = "2026-11-15"
+
+    assert add_event_screen.end.text == "2026-11-16T01:00"
+
+
+def test_a_half_typed_start_date_does_not_move_the_end() -> None:
+    """The end only follows once the typed start date is complete."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+    add_event_screen.end.text = "2026-11-09T16:00"
+
+    add_event_screen.start.date_input.text = "2026-11-1"
+    assert add_event_screen.end.text == "2026-11-09T16:00"
+    add_event_screen.start.date_input.text = "2026-11-31"
+    assert add_event_screen.end.text == "2026-11-09T16:00"
+
+    add_event_screen.start.date_input.text = "2026-11-14"
+    assert add_event_screen.end.text == "2026-11-14T16:00"
+
+
+def test_an_all_day_end_date_moves_by_as_many_days_as_the_start() -> None:
+    """A three-day all-day event moved to the 20th ends on the 22nd."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.all_day.active = True
+    add_event_screen.start.text = "2026-11-09"
+    add_event_screen.end.text = "2026-11-11"
+
+    add_event_screen.start.date_input.text = "2026-11-20"
+
+    assert add_event_screen.end.text == "2026-11-22"
+
+
+def test_dates_set_by_the_form_do_not_move_the_end() -> None:
+    """Filling the form (open, suggest, defaults) never shifts the end."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.end.text = "2026-11-09T16:00"
+
+    add_event_screen.start.text = "2026-12-01T10:00"
+
+    assert add_event_screen.end.text == "2026-11-09T16:00"
