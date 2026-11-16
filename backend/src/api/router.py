@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 
 from api.auth import verify_api_key
 from api.deps import (
@@ -75,10 +75,11 @@ def list_events(
 )
 def get_event(
     event_id: str,
+    calendar_id: str | None = Query(default=None),
     repository: EventRepository = Depends(get_repository),
 ) -> Event:
-    """Get one cached event by id."""
-    result = repository.get(event_id)
+    """Get one cached event by id, within ``calendar_id`` when it is given."""
+    result = repository.get(event_id, calendar_id)
     if result.is_error:
         error = result.error
         if error is None:
@@ -121,9 +122,15 @@ def create_event(
 def update_event(
     event_id: str,
     event: Event,
+    source_calendar_id: str = Query(default=""),
     service: SyncService = Depends(get_sync_service),
 ) -> Event:
-    """Patch an upstream event and refresh the cached copy."""
+    """Patch an upstream event and refresh the cached copy.
+
+    ``source_calendar_id`` names the calendar the event is in now; it is only
+    needed when the id is cached in several calendars.  The body's
+    ``calendar_id`` is where the event should end up.
+    """
     updated = Event(
         id=event_id,
         calendar_id=event.calendar_id,
@@ -138,7 +145,7 @@ def update_event(
         recurrence=event.recurrence,
         extended_properties=event.extended_properties,
     )
-    result = service.update_event(updated)
+    result = service.update_event(updated, source_calendar_id)
     if result.is_error:
         error = result.error
         if error is None:
@@ -157,10 +164,14 @@ def update_event(
 )
 def delete_event(
     event_id: str,
+    calendar_id: str = Query(default=""),
     service: SyncService = Depends(get_sync_service),
 ) -> Response:
-    """Delete an event in Google and drop the cached copy."""
-    result = service.delete_event(event_id)
+    """Delete an event in Google and drop the cached copy.
+
+    ``calendar_id`` is only needed when the id is cached in several calendars.
+    """
+    result = service.delete_event(event_id, calendar_id)
     if result.is_error:
         error = result.error
         if error is None:

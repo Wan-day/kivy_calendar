@@ -966,11 +966,11 @@ def test_calendar_list_refresh_failure_is_actionable(
     assert "python -m google_calendar.auth" in result.error.message
 
 
-def test_list_deduplicates_the_same_event_across_calendars(
+def test_list_keeps_the_same_event_id_in_each_calendar(
     provider: GoogleCalendarProvider,
     service: Mock,
 ) -> None:
-    """An event visible through two calendars is returned only once."""
+    """An event visible through two calendars is kept once per calendar."""
     service.calendarList.return_value.list.return_value.execute.return_value = (
         _calendar_list(
             _calendar_item("primary"),
@@ -992,12 +992,13 @@ def test_list_deduplicates_the_same_event_across_calendars(
 
     assert result.is_ok
     assert result.value is not None
-    assert [event.id for event in result.value] == [
-        "shared-event",
-        "other-event",
+    assert [(event.calendar_id, event.id) for event in result.value] == [
+        ("primary", "shared-event"),
+        ("work@example.com", "shared-event"),
+        ("work@example.com", "other-event"),
     ]
-    assert result.value[0].calendar_id == "primary"
     assert result.value[0].summary == "Team standup"
+    assert result.value[1].summary == "Same event elsewhere"
 
 
 @pytest.mark.parametrize(

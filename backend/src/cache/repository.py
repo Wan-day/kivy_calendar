@@ -20,7 +20,7 @@ from domain.event import Event
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
-    id TEXT PRIMARY KEY NOT NULL,
+    id TEXT NOT NULL,
     calendar_id TEXT NOT NULL DEFAULT '',
     recurring_event_id TEXT NOT NULL DEFAULT '',
     all_day TEXT NOT NULL DEFAULT '0',
@@ -32,10 +32,12 @@ CREATE TABLE IF NOT EXISTS events (
     description TEXT,
     recurrence TEXT,
     extended_properties TEXT NOT NULL,
-    cached_at TEXT NOT NULL
+    cached_at TEXT NOT NULL,
+    PRIMARY KEY (calendar_id, id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_start_utc ON events (start_utc);
+CREATE INDEX IF NOT EXISTS idx_events_id ON events (id);
 """
 
 _COLUMNS = (
@@ -70,8 +72,12 @@ SET calendar_id = ?,
     recurrence = ?,
     extended_properties = ?,
     cached_at = ?
-WHERE id = ?
+WHERE calendar_id = ? AND id = ?
 """
+
+AMBIGUOUS_MESSAGE = (
+    "event {event_id!r} is cached in several calendars; specify calendar_id"
+)
 
 
 class EventRepository:
@@ -112,20 +118,27 @@ class EventRepository:
 
         return self._run(operation)
 
-    def get(self, event_id: str) -> Result[Event]:
-        """Return the cached event with ``event_id``."""
+    def get(self, event_id: str, calendar_id: str | None = None) -> Result[Event]:
+        """Return the cached event with ``event_id``.
+
+        Events are keyed by calendar and id.  Without ``calendar_id`` the id
+        must match exactly one cached event; an id shared by several calendars
+        is rejected as ambiguous instead of guessing.
+        """
 
         def operation(connection: sqlite3.Connection) -> Result[Event]:
-            row = connection.execute(
-                f"SELECT {_COLUMN_LIST} FROM events WHERE id = ?",
-                (event_id,),
-            ).fetchone()
-            if row is None:
+            rows = _select_rows(connection, event_id, calendar_id)
+            if not rows:
                 return Result.fail(
                     ErrorCode.NOT_FOUND,
                     f"event {event_id!r} is not cached",
                 )
-            return Result.ok(_row_to_event(row))
+            if len(rows) > 1:
+                return Result.fail(
+                    ErrorCode.INVALID_ARGUMENT,
+                    AMBIGUOUS_MESSAGE.format(event_id=event_id),
+                )
+            return Result.ok(_row_to_event(rows[0]))
 
         return self._run(operation)
 
@@ -134,19 +147,19 @@ class EventRepository:
 
         def operation(connection: sqlite3.Connection) -> Result[list[Event]]:
             rows = connection.execute(
-                f"SELECT {_COLUMN_LIST} FROM events ORDER BY start_utc, id"
+                f"SELECT {_COLUMN_LIST} FROM events ORDER BY start_utc, calendar_id, id"
             ).fetchall()
             return Result.ok([_row_to_event(row) for row in rows])
 
         return self._run(operation)
 
     def update(self, event: Event) -> Result[Event]:
-        """Replace the cached event that has the same id."""
+        """Replace the cached event with the same calendar and id."""
 
         def operation(connection: sqlite3.Connection) -> Result[Event]:
             cursor = connection.execute(
                 _UPDATE,
-                (*_event_values(event)[1:], event.id),
+                (*_event_values(event)[1:], event.calendar_id, event.id),
             )
             if cursor.rowcount == 0:
                 return Result.fail(
@@ -157,19 +170,25 @@ class EventRepository:
 
         return self._run(operation)
 
-    def delete(self, event_id: str) -> Result[bool]:
-        """Delete one cached event."""
+    def delete(self, event_id: str, calendar_id: str | None = None) -> Result[bool]:
+        """Delete one cached event, rejecting an ambiguous bare id."""
 
         def operation(connection: sqlite3.Connection) -> Result[bool]:
-            cursor = connection.execute(
-                "DELETE FROM events WHERE id = ?",
-                (event_id,),
-            )
-            if cursor.rowcount == 0:
+            rows = _select_rows(connection, event_id, calendar_id)
+            if not rows:
                 return Result.fail(
                     ErrorCode.NOT_FOUND,
                     f"event {event_id!r} is not cached",
                 )
+            if len(rows) > 1:
+                return Result.fail(
+                    ErrorCode.INVALID_ARGUMENT,
+                    AMBIGUOUS_MESSAGE.format(event_id=event_id),
+                )
+            connection.execute(
+                "DELETE FROM events WHERE calendar_id = ? AND id = ?",
+                (rows[0]["calendar_id"], event_id),
+            )
             return Result.ok(True)
 
         return self._run(operation)
@@ -209,23 +228,37 @@ class EventRepository:
 
 
 def _migrate(connection: sqlite3.Connection) -> None:
-    """Add columns introduced after a database was first created."""
-    columns = {
-        row["name"] for row in connection.execute("PRAGMA table_info(events)")
+    """Rebuild a cache table that predates the (calendar_id, id) key.
+
+    The cache is disposable and a re-sync refills it, so an old table is
+    dropped and recreated instead of being converted in place.
+    """
+    key = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(events)")
+        if row["pk"]
     }
-    if "calendar_id" not in columns:
-        connection.execute(
-            "ALTER TABLE events ADD COLUMN calendar_id TEXT NOT NULL DEFAULT ''"
-        )
-    if "recurring_event_id" not in columns:
-        connection.execute(
-            "ALTER TABLE events ADD COLUMN recurring_event_id "
-            "TEXT NOT NULL DEFAULT ''"
-        )
-    if "all_day" not in columns:
-        connection.execute(
-            "ALTER TABLE events ADD COLUMN all_day TEXT NOT NULL DEFAULT '0'"
-        )
+    if key == {"calendar_id", "id"}:
+        return
+    connection.execute("DROP TABLE events")
+    connection.executescript(_SCHEMA)
+
+
+def _select_rows(
+    connection: sqlite3.Connection,
+    event_id: str,
+    calendar_id: str | None,
+) -> list[sqlite3.Row]:
+    """Return the cached rows for an id, optionally within one calendar."""
+    if calendar_id is None:
+        return connection.execute(
+            f"SELECT {_COLUMN_LIST} FROM events WHERE id = ?",
+            (event_id,),
+        ).fetchall()
+    return connection.execute(
+        f"SELECT {_COLUMN_LIST} FROM events WHERE calendar_id = ? AND id = ?",
+        (calendar_id, event_id),
+    ).fetchall()
 
 
 def _event_values(event: Event) -> tuple[object, ...]:

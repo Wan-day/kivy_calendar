@@ -317,24 +317,25 @@ class GoogleCalendarProvider:
     def list_events(self) -> Result[list[Event]]:
         """Return every event from every readable calendar.
 
-        Google can expose the same event through more than one calendar, so
-        duplicate ids are collapsed to the first calendar that lists them.
+        Google can expose the same event through more than one calendar; each
+        calendar's copy is kept, identified by its calendar and event id.
         """
         calendars = self._calendar_ids()
         if calendars.error is not None:
             return Result.fail(calendars.error.code, calendars.error.message)
 
         events: list[Event] = []
-        seen: set[str] = set()
+        seen: set[tuple[str, str]] = set()
         for calendar_id in calendars.value or []:
             listed = self._list_calendar_events(calendar_id)
             if listed.error is not None:
                 return Result.fail(listed.error.code, listed.error.message)
             for event in listed.value or []:
                 for candidate in expand_event(event):
-                    if candidate.id in seen:
+                    key = (candidate.calendar_id, candidate.id)
+                    if key in seen:
                         continue
-                    seen.add(candidate.id)
+                    seen.add(key)
                     events.append(candidate)
         return Result.ok(events)
 

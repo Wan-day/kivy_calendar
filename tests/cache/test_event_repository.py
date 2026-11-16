@@ -133,8 +133,8 @@ def test_all_day_round_trips_through_the_cache(
     assert loaded.all_day is True
 
 
-def test_old_cache_is_migrated_with_a_blank_calendar_id(tmp_path: Path) -> None:
-    """Opening an old database adds the calendar_id column without losing rows."""
+def test_old_cache_is_rebuilt_with_the_calendar_key(tmp_path: Path) -> None:
+    """An old id-only table is rebuilt empty; a re-sync refills the cache."""
     database = Database(tmp_path / "old" / "calendar.db")
     with closing(database.connect()) as connection:
         connection.executescript(
@@ -177,16 +177,18 @@ def test_old_cache_is_migrated_with_a_blank_calendar_id(tmp_path: Path) -> None:
         connection.commit()
 
     repository = EventRepository(database)
-    loaded = _cached(repository.get("old-event"))
+    missing = repository.get("old-event")
 
-    assert loaded.summary == "Old standup"
-    assert loaded.calendar_id == ""
+    assert missing.error is not None
+    assert missing.error.code is ErrorCode.NOT_FOUND
+    assert repository.create(_event("new", calendar_id="work")).is_ok
     with closing(database.connect()) as connection:
-        columns = {
+        key = {
             row["name"]
             for row in connection.execute("PRAGMA table_info(events)")
+            if row["pk"]
         }
-    assert "calendar_id" in columns
+    assert key == {"calendar_id", "id"}
 
 
 def test_create_rejects_a_duplicate_id(repository: EventRepository) -> None:
@@ -338,3 +340,49 @@ def test_replace_all_keeps_the_old_cache_on_failure(
     assert result.error is not None
     assert result.error.code is ErrorCode.ALREADY_EXISTS
     assert [event.id for event in _cached_events(repository.list())] == ["old"]
+
+
+def test_same_id_can_be_cached_in_two_calendars(
+    repository: EventRepository,
+) -> None:
+    """The cache keys events by calendar and id."""
+    assert repository.create(_event("shared", calendar_id="a")).is_ok
+    assert repository.create(_event("shared", calendar_id="b")).is_ok
+
+    duplicate = repository.create(_event("shared", calendar_id="a"))
+
+    assert duplicate.error is not None
+    assert duplicate.error.code is ErrorCode.ALREADY_EXISTS
+    assert [e.calendar_id for e in _cached_events(repository.list())] == ["a", "b"]
+
+
+def test_get_and_delete_target_one_calendar_copy(
+    repository: EventRepository,
+) -> None:
+    """A calendar id picks one copy; a bare shared id is ambiguous."""
+    assert repository.create(_event("shared", calendar_id="a")).is_ok
+    assert repository.create(_event("shared", calendar_id="b", summary="B")).is_ok
+
+    assert _cached(repository.get("shared", "b")).summary == "B"
+    ambiguous = repository.get("shared")
+    assert ambiguous.error is not None
+    assert ambiguous.error.code is ErrorCode.INVALID_ARGUMENT
+    refused = repository.delete("shared")
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.INVALID_ARGUMENT
+
+    assert _deleted(repository.delete("shared", "a")) is True
+    assert _cached(repository.get("shared")).calendar_id == "b"
+
+
+def test_update_only_touches_its_own_calendar_copy(
+    repository: EventRepository,
+) -> None:
+    """Updating one calendar's copy leaves the other copy alone."""
+    assert repository.create(_event("shared", calendar_id="a")).is_ok
+    assert repository.create(_event("shared", calendar_id="b")).is_ok
+
+    assert repository.update(_event("shared", calendar_id="a", summary="New")).is_ok
+
+    assert _cached(repository.get("shared", "a")).summary == "New"
+    assert _cached(repository.get("shared", "b")).summary == "Team standup"
