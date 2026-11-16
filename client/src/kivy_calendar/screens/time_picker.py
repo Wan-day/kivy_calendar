@@ -15,6 +15,7 @@ ROW_HEIGHT = 44
 DROPDOWN_MAX_HEIGHT = 320
 MINUTE_STEP = 5
 TIME_PLACEHOLDER = "Pick time"
+SELECTED_COLOR = (0.25, 0.5, 0.85, 1)
 
 
 def hour_choices() -> list[str]:
@@ -57,6 +58,8 @@ class DateTimeField(BoxLayout):
         self._dropdown: DropDown | None = None
         # Values in the open hour or minute list, empty when none is open.
         self.choices: list[str] = []
+        # The entry of the open list matching the current time, if any.
+        self.selected_choice = ""
 
     @property
     def text(self) -> str:
@@ -97,18 +100,29 @@ class DateTimeField(BoxLayout):
 
     def open_hour_picker(self) -> None:
         """Open the hour list below the time button."""
-        self._open_dropdown(hour_choices(), lambda value: self.select_hour(int(value)))
+        current_hour = self._time[:2]
+        self._open_dropdown(
+            hour_choices(),
+            lambda value: self.select_hour(int(value)),
+            selected=current_hour,
+        )
 
     def select_hour(self, hour: int) -> None:
         """Remember ``hour`` and open the minute list for it."""
         values = minute_choices(hour)
+        selected = self._nearest_choice(values)
         self.choices = values
+        self.selected_choice = selected
         # Open on the next frame so the closing hour list does not swallow it.
-        Clock.schedule_once(lambda *_: self._open_dropdown(values, self.select_time), 0)
+        Clock.schedule_once(
+            lambda *_: self._open_dropdown(values, self.select_time, selected=selected),
+            0,
+        )
 
     def select_time(self, value: str) -> None:
         """Set the time from a ``HH:MM`` choice."""
         self.choices = []
+        self.selected_choice = ""
         self._set_time(value)
 
     def dismiss_picker(self) -> None:
@@ -117,14 +131,29 @@ class DateTimeField(BoxLayout):
             self._dropdown.dismiss()
             self._dropdown = None
         self.choices = []
+        self.selected_choice = ""
 
-    def _open_dropdown(self, values: list[str], on_pick: Callable[[str], None]) -> None:
-        """Show ``values`` in a dropdown and pass the chosen one to ``on_pick``."""
+    def _open_dropdown(
+        self,
+        values: list[str],
+        on_pick: Callable[[str], None],
+        *,
+        selected: str = "",
+    ) -> None:
+        """Show ``values`` in a dropdown and pass the chosen one to ``on_pick``.
+
+        The list opens scrolled to ``selected``, which is highlighted.
+        """
         self.dismiss_picker()
         self.choices = values
+        self.selected_choice = selected if selected in values else ""
         dropdown = DropDown(max_height=DROPDOWN_MAX_HEIGHT)
+        selected_button: Button | None = None
         for value in values:
             button = Button(text=value, size_hint_y=None, height=ROW_HEIGHT)
+            if value == self.selected_choice:
+                button.background_color = SELECTED_COLOR
+                selected_button = button
             button.bind(on_release=lambda btn: dropdown.select(btn.text))
             dropdown.add_widget(button)
 
@@ -136,6 +165,20 @@ class DateTimeField(BoxLayout):
         self._dropdown = dropdown
         if self.get_parent_window() is not None:
             dropdown.open(self.time_button)
+            if selected_button is not None:
+                target = selected_button
+                # Scroll once the list has been laid out.
+                Clock.schedule_once(
+                    lambda *_: dropdown.scroll_to(target, animate=False), 0
+                )
+
+    def _nearest_choice(self, values: list[str]) -> str:
+        """Return the minute choice at or just before the current time."""
+        current = self._time[:5]
+        if not values or current[:2] != values[0][:2]:
+            return ""
+        earlier = [value for value in values if value <= current]
+        return earlier[-1] if earlier else values[0]
 
     def _set_time(self, value: str) -> None:
         """Store the time text and show it on the button."""

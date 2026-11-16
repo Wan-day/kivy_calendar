@@ -985,3 +985,22 @@ def test_editing_keeps_a_time_that_is_not_on_a_five_minute_step() -> None:
     built = add_event_screen._build_event()
     assert built is not None
     assert built.start == event.start
+
+
+def test_time_lists_open_at_the_current_hour_and_minute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hour list starts at the set hour; the minutes at the set minute."""
+    _run_inline(monkeypatch)
+    _, _, add_event_screen = _make_screens(FakeClient())
+    field = add_event_screen.start
+    field.text = "2026-11-09T14:27"
+
+    field.open_hour_picker()
+    assert field.selected_choice == "14"
+
+    field.select_hour(14)
+    assert field.selected_choice == "14:25"
+
+    field.select_hour(9)
+    assert field.selected_choice == ""
