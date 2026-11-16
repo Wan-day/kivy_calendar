@@ -70,7 +70,10 @@ jobs:
     env:
       KIVY_NO_ARGS: "1"
       KIVY_NO_CONSOLELOG: "1"
-      SDL_VIDEODRIVER: dummy
+      # Kivy needs a real GL context; the SDL dummy driver has none, so the
+      # tests run under a virtual X display instead.
+      SDL_VIDEODRIVER: x11
+      LIBGL_ALWAYS_SOFTWARE: "1"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -81,13 +84,13 @@ jobs:
           python-version: "3.14"
 
       - name: Install system libraries for headless Kivy
-        run: sudo apt-get update && sudo apt-get install -y libgl1 libmtdev1t64
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1 libgl1-mesa-dri libegl1 libmtdev1t64
 
       - name: Install client and test dependencies
         run: python -m pip install ./client pytest
 
       - name: Run client tests
-        run: cd client && pytest
+        run: cd client && xvfb-run -a -s "-screen 0 1280x1024x24" pytest
 
   docker:
     name: Docker build
