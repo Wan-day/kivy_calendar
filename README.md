@@ -227,12 +227,13 @@ when they are opaque and on a writable calendar.
 
 ```sh
 cp .env.example .env   # fill in the values
-BACKEND_BIND_IP=<vpn-ip> docker compose -f docker/compose.yml up -d --build
+docker compose --env-file .env -f docker/compose.yml up -d --build
 ```
 
-Compose reads `${BACKEND_BIND_IP}` from the shell environment or from a `.env`
-next to the compose file (`docker/.env`), not from the repository-root `.env`
-that the container receives. Set it on the command line, as above, or export it.
+Run it from the repository root. `--env-file .env` makes Compose read
+`BACKEND_BIND_IP` from the root `.env`. Without it, Compose looks for a `.env`
+next to the compose file (`docker/.env`) and the port stays on `127.0.0.1`. A
+`BACKEND_BIND_IP` exported in the shell overrides the file.
 
 The port is published only on `BACKEND_BIND_IP` (default `127.0.0.1`); never
 set it to `0.0.0.0`. The container listens on all interfaces inside its own
