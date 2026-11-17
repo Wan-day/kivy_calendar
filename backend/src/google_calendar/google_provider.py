@@ -44,6 +44,8 @@ HTTP status  Error code
 ===========  =========================================
 400          ``INVALID_ARGUMENT``
 401          ``AUTH_ERROR``
+403          ``PERMISSION_DENIED`` (``UPSTREAM_ERROR``
+             for rate-limit and quota reasons)
 404 / 410    ``NOT_FOUND``
 409          ``ALREADY_EXISTS``
 429 / 5xx    ``UPSTREAM_ERROR``
@@ -51,10 +53,12 @@ other        ``UPSTREAM_ERROR``
 ===========  =========================================
 
 401 responses and OAuth refresh failures (:class:`google.auth.exceptions.RefreshError`)
-are permanent ``AUTH_ERROR`` failures.  403 is treated as a retryable
-``UPSTREAM_ERROR`` because reliably distinguishing quota/rate-limit reasons
-from a revoked grant requires parsing Google's error payload; the job will
-eventually exhaust its retries instead.
+are permanent ``AUTH_ERROR`` failures.  A 403 is classified by the ``reason``
+in Google's error payload: throttling reasons (``rateLimitExceeded``,
+``userRateLimitExceeded``, ``quotaExceeded``, ``dailyLimitExceeded``,
+``backendError``) are a retryable ``UPSTREAM_ERROR``; anything else, such as
+``forbidden`` or ``insufficientPermissions`` on a read-only calendar, is a
+permanent ``PERMISSION_DENIED`` that is never queued for retry.
 
 Network timeouts and connection failures also become ``UPSTREAM_ERROR``.
 Operational exceptions never escape the provider.
