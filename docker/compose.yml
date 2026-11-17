@@ -1,3 +1,7 @@
+# Run from the repository root so ${BACKEND_BIND_IP} is read from the root .env:
+#   docker compose --env-file .env -f docker/compose.yml up -d --build
+# Without --env-file, Compose looks for .env next to this file instead, and
+# the port falls back to 127.0.0.1.
 services:
   backend:
     build:
