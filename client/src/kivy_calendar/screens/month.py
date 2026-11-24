@@ -11,6 +11,7 @@ from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
+from kivy.uix.widget import Widget
 
 from kivy_calendar.grid_layout import MonthLayout, at_local, build_month, month_title
 from kivy_calendar.models import CalendarEvent
@@ -38,15 +39,45 @@ NUMBER_ROW = dp(20)
 CHIP_HEIGHT = dp(15)
 CHIP_GAP = dp(1)
 CELL_PADDING = dp(2)
+# Day numbers and chips of the days around the month, clearly lighter.
+OTHER_MONTH_NUMBER = (*MUTED[:3], 0.45)
+OTHER_MONTH_CHIP_OPACITY = 0.55
 
 
 class EventChip(EventBlock):
     """A one-line event chip small enough for a phone's day cell."""
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Create the chip; its title is clipped, not shortened with "..."."""
+        super().__init__(*args, **kwargs)
+        self.shorten = False
+
     def _fit_text(self, *_: Any) -> None:
-        """Keep the title on one line, cut with an ellipsis."""
+        """Keep the title on one line; ``texture_update`` clips it."""
         self.text_size = (max(self.width - dp(4), dp(4)), self.height)
         self.max_lines = 1
+
+    def texture_update(self, *args: Any) -> None:
+        """Draw as many characters of the title as fit, with no ellipsis."""
+        label = self._label
+        label.text = self._clip(self.text, self.text_size[0] or 0)
+        super().texture_update(*args)
+
+    def _clip(self, text: str, room: float) -> str:
+        """Return the longest start of ``text`` that is at most ``room`` wide."""
+        if not text or room <= 0:
+            return text
+        extents = self._label.get_extents
+        if extents(text)[0] <= room:
+            return text
+        low, high = 0, len(text)
+        while low < high:
+            mid = (low + high + 1) // 2
+            if extents(text[:mid])[0] <= room:
+                low = mid
+            else:
+                high = mid - 1
+        return text[:low].rstrip()
 
 
 class MoreLine(ButtonBehavior, Label):
@@ -103,19 +134,23 @@ class DayCell(BoxLayout):
         self.chips: list[EventChip] = []
         self.more: MoreLine | None = None
         self._tap_start: tuple[float, float] | None = None
+        self._on_child = False
+        # Fills the room under the chips so the number and chips sit on top.
+        self._filler = Widget()
 
         Paint(self, NOW_TINT if is_today else CLEAR, radius=4, border=BORDER)
         self.number = Label(
             text=str(day.day),
             font_name=FONT_SEMIBOLD if is_today else FONT,
             font_size="12sp",
-            color=INK if is_today or in_month else MUTED,
+            color=INK if is_today or in_month else OTHER_MONTH_NUMBER,
             size_hint=(None, None),
             size=(dp(22), NUMBER_ROW - dp(2)),
         )
         if is_today:
             Paint(self.number, SKY, radius=10)
         self.add_widget(self.number)
+        self.add_widget(self._filler)
         self.bind(size=self._fill)
         self._fill()
 
@@ -129,6 +164,7 @@ class DayCell(BoxLayout):
         """Show the chips that fit, then "+N" for the rest."""
         for child in [*self.chips, *([self.more] if self.more else [])]:
             self.remove_widget(child)
+        self.remove_widget(self._filler)
         self.chips = []
         self.more = None
         shown = len(self.events)
@@ -138,6 +174,8 @@ class DayCell(BoxLayout):
             chip = EventChip(event, self.colour_for(event.calendar_id), font_size="9sp")
             chip.size_hint = (1, None)
             chip.height = CHIP_HEIGHT
+            if not self.in_month:
+                chip.opacity = OTHER_MONTH_CHIP_OPACITY
             chip.bind(on_release=lambda c: self.open_event(c.event))
             self.chips.append(chip)
             self.add_widget(chip)
@@ -146,18 +184,37 @@ class DayCell(BoxLayout):
             self.more = MoreLine(hidden)
             self.more.bind(on_release=lambda *_: self.on_more(self.day))
             self.add_widget(self.more)
+        self.add_widget(self._filler)
+
+    def _hits_child(self, touch: Any) -> bool:
+        """Return whether ``touch`` is on a chip or the "+N" line."""
+        targets: list[Widget] = [*self.chips]
+        if self.more is not None:
+            targets.append(self.more)
+        return any(child.collide_point(*touch.pos) for child in targets)
 
     def on_touch_down(self, touch: Any) -> bool:
         """Remember where a touch started so a drag is not taken as a tap."""
-        self._tap_start = touch.pos if self.collide_point(*touch.pos) else None
+        inside = self.collide_point(*touch.pos)
+        self._on_child = inside and self._hits_child(touch)
+        # Only a touch that starts on empty space can become a day tap.
+        self._tap_start = touch.pos if inside and not self._on_child else None
         return super().on_touch_down(touch)
 
     def on_touch_up(self, touch: Any) -> bool:
-        """Treat a short touch on empty space as a tap on the day."""
-        if super().on_touch_up(touch):
-            return True
+        """Treat a short touch on empty space as a tap on the day.
+
+        A touch that started on a chip or "+N" belongs to that child, which
+        fires its own action, so the day is never also tapped.
+        """
+        handled = super().on_touch_up(touch)
         start, self._tap_start = self._tap_start, None
-        if start is None or not self.collide_point(*touch.pos):
+        on_child, self._on_child = self._on_child, False
+        if handled or on_child or start is None:
+            return handled
+        if getattr(touch, "grab_current", None) is not None:
+            return False
+        if not self.collide_point(*touch.pos) or self._hits_child(touch):
             return False
         if abs(touch.x - start[0]) > TAP_SLOP or abs(touch.y - start[1]) > TAP_SLOP:
             return False
@@ -224,7 +281,7 @@ class MonthView(BoxLayout):
             names.add_widget(
                 Label(text=name, font_name=FONT, font_size="12sp", color=MUTED)
             )
-        self.grid = GridLayout(cols=7, spacing=dp(2))
+        self.grid = GridLayout(cols=7, rows=6, spacing=dp(2))
         self.add_widget(nav)
         self.add_widget(names)
         self.add_widget(self.grid)
@@ -278,6 +335,8 @@ class MonthView(BoxLayout):
         today = self.today()
         self.title_label.text = month_title(self.anchor)
         self.grid.clear_widgets()
+        # The rows share the grid's height, so every week stays on screen.
+        self.grid.rows = len(layout.days) // 7
         self.cells = []
         for day in layout.days:
             cell = DayCell(

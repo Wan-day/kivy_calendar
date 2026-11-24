@@ -6,8 +6,8 @@ Kivy is optional in CI, so these tests are skipped when it is not installed.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import date, datetime, timedelta
-from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -79,9 +79,44 @@ def _month(*events: CalendarEvent) -> tuple[MonthView, Recorder]:
     return view, recorder
 
 
+class FakeTouch:
+    """A touch with the parts of a Kivy touch that buttons and cells use."""
+
+    is_mouse_scrolling = False
+    button = "left"
+
+    def __init__(self, x: float, y: float) -> None:
+        self.pos = (x, y)
+        self.x = x
+        self.y = y
+        self.ud: dict[Any, Any] = {}
+        self.grab_current: Any = None
+        self.grabbed: list[Any] = []
+
+    def grab(self, widget: Any) -> None:
+        """Remember ``widget`` as a grabber."""
+        self.grabbed.append(widget)
+
+    def ungrab(self, widget: Any) -> None:
+        """Forget ``widget`` as a grabber."""
+        if widget in self.grabbed:
+            self.grabbed.remove(widget)
+
+
 def _touch(x: float, y: float) -> Any:
     """Return a minimal touch at a window point."""
-    return SimpleNamespace(pos=(x, y), x=x, y=y)
+    return FakeTouch(x, y)
+
+
+def _quick_tap(cell: Any, x: float, y: float) -> None:
+    """Dispatch down and up like the window does, grab pass included."""
+    touch = _touch(x, y)
+    cell.dispatch("on_touch_down", touch)
+    for grabber in list(touch.grabbed):
+        touch.grab_current = grabber
+        grabber.dispatch("on_touch_up", touch)
+    touch.grab_current = None
+    cell.dispatch("on_touch_up", touch)
 
 
 def test_cells_cover_the_month_with_neighbouring_days() -> None:
@@ -181,7 +216,7 @@ def test_chips_use_the_calendar_colour_and_one_line() -> None:
 
     (chip,) = view.chips
     assert tuple(chip.paint.border_color.rgba) == colour
-    assert chip.shorten
+    assert not chip.shorten  # clipped by texture_update, no ellipsis
     assert chip.max_lines == 1
     assert chip.text_size[0] <= chip.width
 
@@ -215,6 +250,100 @@ def test_tapping_a_chip_opens_the_event_only() -> None:
     assert recorder.new_starts == []
 
 
+def test_a_quick_tap_on_a_chip_fires_only_that_chip() -> None:
+    """Down+up on a chip opens its event once and adds nothing else."""
+    event = _event("a", 11)
+    view, recorder = _month(event)
+    cell = view.cell_for(date(2026, 11, 11))
+    assert cell is not None
+    chip = cell.chips[0]
+
+    cell.do_layout()
+    _quick_tap(cell, *chip.center)
+
+    assert recorder.opened == [event]
+    assert recorder.new_starts == []
+    assert recorder.weeks == []
+
+
+def test_a_quick_tap_on_plus_fires_only_show_week() -> None:
+    """Down+up on "+N" shows the week and never starts a new event."""
+    events = [_event(f"e{i}", 11, 8 + i, 9 + i) for i in range(6)]
+    view, recorder = _month(*events)
+    cell = view.cell_for(date(2026, 11, 11))
+    assert cell is not None and cell.more is not None
+
+    cell.do_layout()
+    _quick_tap(cell, *cell.more.center)
+
+    assert recorder.weeks == [date(2026, 11, 11)]
+    assert recorder.new_starts == []
+    assert recorder.opened == []
+
+
+def test_a_quick_tap_on_empty_space_fires_only_new_event() -> None:
+    """Down+up on empty space starts exactly one new event."""
+    view, recorder = _month(_event("a", 11))
+    cell = view.cell_for(date(2026, 11, 11))
+    assert cell is not None
+    cell.do_layout()
+    chip = cell.chips[0]
+
+    _quick_tap(cell, cell.center_x, chip.y - dp(3))
+    _quick_tap(cell, cell.center_x, cell.y + dp(3))
+
+    assert recorder.new_starts == [datetime(2026, 11, 11, 9, 0, tzinfo=BERLIN)] * 2
+    assert recorder.opened == []
+    assert recorder.weeks == []
+
+
+def test_numbers_and_chips_are_pinned_to_the_top() -> None:
+    """Every day number sits at the same height in its cell, chips below."""
+    view, _ = _month(_event("a", 11), _event("b", 11, 11, 12))
+    for cell in view.cells:
+        cell.do_layout()
+    tops = {round(cell.top - cell.number.top, 1) for cell in view.cells}
+    assert len(tops) == 1
+    busy = view.cell_for(date(2026, 11, 11))
+    assert busy is not None
+    assert busy.chips[0].top <= busy.number.y
+    assert busy.chips[1].top <= busy.chips[0].y
+
+
+def test_other_month_days_are_clearly_muted() -> None:
+    """Neighbouring days get a lighter number and faded chips."""
+    october_event = replace(
+        _event("o", 28),
+        start=datetime(2026, 10, 28, 9, tzinfo=BERLIN),
+        end=datetime(2026, 10, 28, 10, tzinfo=BERLIN),
+    )
+    view, _ = _month(_event("a", 11), october_event)
+    october = view.cells[0]
+    november = view.cell_for(date(2026, 11, 3))
+    assert november is not None
+    assert october.number.color[3] < 0.6
+    assert november.number.color[3] == 1
+    inside = view.cell_for(date(2026, 11, 11))
+    assert inside is not None and inside.chips[0].opacity == 1
+    faded = view.cell_for(date(2026, 10, 28))
+    assert faded is not None and faded.chips
+    assert faded.chips[0].opacity < 1
+
+
+def test_chip_text_is_clipped_not_ellipsised() -> None:
+    """A narrow chip shows as many characters as fit, with no ellipsis."""
+    long_event = replace(_event("x", 11), summary="Quarterly planning review")
+    view, _ = _month(long_event)
+    chip = view.chips[0]
+    chip.texture_update()
+    shown = chip._label.text
+    assert chip.text == "Quarterly planning review"
+    assert "." not in shown and "…" not in shown
+    assert 0 < len(shown) < len(chip.text)
+    assert chip.text.startswith(shown)
+    assert chip.texture_size[0] <= chip.width
+
+
 def test_tapping_empty_space_starts_an_event_at_nine() -> None:
     """A tap on a day cell asks for a new event at 09:00 on that day."""
     view, recorder = _month(_event("a", 11))
@@ -222,9 +351,7 @@ def test_tapping_empty_space_starts_an_event_at_nine() -> None:
     assert cell is not None
     x, y = cell.x + cell.width / 2, cell.y + dp(4)
 
-    down = _touch(x, y)
-    cell.on_touch_down(down)
-    cell.on_touch_up(down)
+    _quick_tap(cell, x, y)
 
     assert recorder.new_starts == [datetime(2026, 11, 20, 9, 0, tzinfo=BERLIN)]
     assert recorder.new_starts[0].utcoffset() is not None
@@ -332,12 +459,17 @@ def test_month_button_is_enabled_and_swaps_the_body(
     assert main_screen.view_body.children == [main_screen.month_view]
     assert main_screen.filter_panel.parent is None
     assert [c.text for c in main_screen.month_view.chips] == ["a"]
-    assert main_screen.status_label.text == "1 event"
+    # A plain count folds away in grid views.
+    assert main_screen.status_label.text == ""
+    assert main_screen.status_label.height == 0
 
     main_screen.view_buttons["list"].dispatch("on_release")
 
     assert main_screen.current_view == "list"
     assert main_screen.filter_panel.parent is not None
+    assert main_screen.status_label.text == "1 event"
+    assert main_screen.status_label.height > 0
+    assert main_screen.content.padding[3] == 0
 
 
 def test_month_chip_opens_the_event_form_and_empty_day_adds_one(
@@ -398,7 +530,7 @@ def test_month_view_uses_the_name_filter_and_reloads(
     main_screen._apply_filters()
 
     assert [c.text for c in main_screen.month_view.chips] == ["Lunch"]
-    assert main_screen.status_label.text == "1 event"
+    assert main_screen.status_label.text == ""
 
     main_screen.name_filter.text = "zzz"
     main_screen._apply_filters()
@@ -409,3 +541,30 @@ def test_month_view_uses_the_name_filter_and_reloads(
     main_screen.name_filter.text = ""
     main_screen._show_events([_event("New", 10, 8, 9)])
     assert [c.text for c in main_screen.month_view.chips] == ["New"]
+
+
+def test_grid_views_end_above_the_new_event_button(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 6-row month fits the room above the floating button."""
+    main_screen, _ = _main(monkeypatch, _event("a", 11))
+    root = main_screen.children[0]
+    root.size = (dp(411), dp(914))
+    main_screen.show_view("month")
+    for widget in (
+        root,
+        main_screen.content,
+        main_screen.view_body,
+        main_screen.month_view,
+        main_screen.month_view.grid,
+    ):
+        widget.do_layout()
+
+    button = main_screen.add_button
+    cells = main_screen.month_view.cells
+    assert len(cells) == 42
+    assert all(cell.height > dp(40) for cell in cells)
+    assert min(cell.y for cell in cells) >= button.top
+
+    main_screen.show_view("list")
+    assert main_screen.content.padding[3] == 0
