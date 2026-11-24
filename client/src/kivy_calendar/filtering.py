@@ -7,7 +7,7 @@ from datetime import date
 from typing import Final, Literal
 from zoneinfo import ZoneInfo
 
-from kivy_calendar.api import CalendarEvent
+from kivy_calendar.models import CalendarEvent
 
 SortOrder = Literal["start", "start_desc", "name"]
 

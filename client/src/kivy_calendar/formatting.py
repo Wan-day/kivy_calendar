@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from kivy_calendar.api import CalendarEvent
+from kivy_calendar.models import CalendarEvent
 
 DEFAULT_TIME_ZONE = "Europe/Berlin"
 

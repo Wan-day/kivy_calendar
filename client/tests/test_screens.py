@@ -1260,3 +1260,26 @@ def test_main_screen_shows_the_app_version() -> None:
     _, main_screen, _ = _make_screens(FakeClient())
 
     assert main_screen.version_label.text == f"v{__version__}"
+
+
+def test_screens_work_against_the_in_memory_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new event saved in the form shows up in the list, with no backend."""
+    from kivy_calendar.memory_service import InMemoryCalendarService
+
+    _run_inline(monkeypatch)
+    service = InMemoryCalendarService()
+    manager, main_screen, add_event_screen = _make_screens(service)
+    add_event_screen.refresh = main_screen.load_events
+    manager.current = "add_event"
+    add_event_screen.open_for(None)
+    add_event_screen.summary.text = "Dentist"
+    add_event_screen.start.text = "2026-11-09T15:00"
+    add_event_screen.end.text = "2026-11-09T16:00"
+
+    add_event_screen.save_event()
+
+    assert manager.current == "main"
+    assert [row.event.summary for row in main_screen.rows] == ["Dentist"]
+    assert main_screen.rows[0].event.calendar_id == "personal"

@@ -16,19 +16,18 @@ from kivy.uix.screenmanager import Screen
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
 
-from kivy_calendar.api import (
-    BackendClient,
-    BackendError,
-    CalendarEvent,
-    CalendarSummary,
-    FreeSlot,
-    TimeZoneOption,
-)
 from kivy_calendar.formatting import (
     DEFAULT_TIME_ZONE,
     default_event_times,
     localize_wall_clock,
     to_wall_clock_value,
+)
+from kivy_calendar.models import (
+    CalendarEvent,
+    CalendarSummary,
+    FreeSlot,
+    ServiceError,
+    TimeZoneOption,
 )
 from kivy_calendar.screens.theme import (
     BACKGROUND,
@@ -60,6 +59,7 @@ from kivy_calendar.screens.ui import (
     plain_input,
     wrapped_label,
 )
+from kivy_calendar.service import CalendarService
 
 QUEUED_NOTICE = "Saved. Google is unreachable, so it will sync automatically."
 SPINNER_WIDTH = 190
@@ -104,7 +104,7 @@ class AddEventScreen(Screen):
 
     def __init__(
         self,
-        client: BackendClient | None,
+        client: CalendarService | None,
         refresh: Callable[[], None],
         time_zone: str = DEFAULT_TIME_ZONE,
         event: CalendarEvent | None = None,
@@ -312,7 +312,7 @@ class AddEventScreen(Screen):
 
     def _persist_event(
         self,
-        client: BackendClient,
+        client: CalendarService,
         event: CalendarEvent,
         editing: bool,
     ) -> None:
@@ -326,7 +326,7 @@ class AddEventScreen(Screen):
                 )
             else:
                 saved = client.create_event(event)
-        except BackendError as error:
+        except ServiceError as error:
             message = error.message
             Clock.schedule_once(lambda *_: self._on_save_failed(message))
             return
@@ -354,11 +354,11 @@ class AddEventScreen(Screen):
         )
         thread.start()
 
-    def _fetch_time_zones(self, client: BackendClient) -> None:
+    def _fetch_time_zones(self, client: CalendarService) -> None:
         """Load time zones in the background and apply them on the UI thread."""
         try:
             zones = client.list_time_zones()
-        except BackendError as error:
+        except ServiceError as error:
             message = error.message
             Clock.schedule_once(lambda *_: self._on_time_zones_failed(message))
             return
@@ -409,11 +409,11 @@ class AddEventScreen(Screen):
         )
         thread.start()
 
-    def _fetch_calendars(self, client: BackendClient) -> None:
+    def _fetch_calendars(self, client: CalendarService) -> None:
         """Load calendars in the background and apply them on the UI thread."""
         try:
             calendars = client.list_calendars()
-        except BackendError as error:
+        except ServiceError as error:
             message = error.message
             Clock.schedule_once(lambda *_: self._on_calendars_failed(message))
             return
@@ -550,7 +550,7 @@ class AddEventScreen(Screen):
 
     def _find_free_slots(
         self,
-        client: BackendClient,
+        client: CalendarService,
         duration_minutes: int,
         window_start: datetime,
         window_end: datetime,
@@ -564,7 +564,7 @@ class AddEventScreen(Screen):
                 window_end,
                 time_zone,
             )
-        except BackendError as error:
+        except ServiceError as error:
             message = error.message
             Clock.schedule_once(lambda *_: self._on_suggest_failed(message))
             return
@@ -687,14 +687,14 @@ class AddEventScreen(Screen):
 
     def _delete_event(
         self,
-        client: BackendClient,
+        client: CalendarService,
         event_id: str,
         calendar_id: str = "",
     ) -> None:
         """Delete the event off the UI thread and hand the result back."""
         try:
             queued = client.delete_event(event_id, calendar_id)
-        except BackendError as error:
+        except ServiceError as error:
             message = error.message
             Clock.schedule_once(lambda *_: self._on_delete_failed(message))
             return
