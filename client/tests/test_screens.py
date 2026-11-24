@@ -10,7 +10,7 @@ import os
 import threading
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -226,7 +226,7 @@ def test_main_screen_lists_events() -> None:
 
     main_screen._show_events([_sample_event()])
 
-    assert len(main_screen.event_list.children) == 1
+    assert len(main_screen.rows) == 1
     assert main_screen.status_label.text == "1 event"
 
 
@@ -235,7 +235,7 @@ def test_tapping_an_event_opens_the_form_in_edit_mode() -> None:
     manager, main_screen, add_event_screen = _make_screens(FakeClient())
     event = _sample_event()
     main_screen._show_events([event])
-    row = main_screen.event_list.children[0]
+    row = main_screen.rows[0]
 
     row.dispatch("on_release")
 
@@ -560,13 +560,13 @@ def test_main_screen_filters_by_name(
     main_screen.name_filter.text = "Standup"
     _run_inline(monkeypatch)
 
-    assert len(main_screen.event_list.children) == 1
+    assert len(main_screen.rows) == 1
     assert main_screen.status_label.text == "1 event"
 
     main_screen.name_filter.text = "Dentist"
     _run_inline(monkeypatch)
 
-    assert len(main_screen.event_list.children) == 0
+    assert len(main_screen.rows) == 0
     assert main_screen.status_label.text == "No events match the filters."
 
 
@@ -577,17 +577,17 @@ def test_main_screen_filters_by_date_range(
     _, main_screen, _ = _make_screens(FakeClient())
     main_screen._show_events([_sample_event()])
 
-    main_screen.date_from_filter.text = "2026-11-09"
-    main_screen.date_to_filter.text = "2026-11-09"
+    main_screen.date_from_filter.value = "2026-11-09"
+    main_screen.date_to_filter.value = "2026-11-09"
     _run_inline(monkeypatch)
 
-    assert len(main_screen.event_list.children) == 1
+    assert len(main_screen.rows) == 1
 
-    main_screen.date_from_filter.text = "2026-11-10"
-    main_screen.date_to_filter.text = "2026-11-10"
+    main_screen.date_from_filter.value = "2026-11-10"
+    main_screen.date_to_filter.value = "2026-11-10"
     _run_inline(monkeypatch)
 
-    assert len(main_screen.event_list.children) == 0
+    assert len(main_screen.rows) == 0
     assert main_screen.status_label.text == "No events match the filters."
 
 
@@ -617,7 +617,7 @@ def test_main_screen_sorts_the_visible_events() -> None:
     main_screen._show_events(events)
     main_screen.sort_spinner.text = "Name: A-Z"
 
-    assert main_screen.event_list.children[0].event.summary == "Alpha"
+    assert main_screen.rows[0].event.summary == "Alpha"
 
 
 def test_main_screen_clear_filters_resets_the_list() -> None:
@@ -628,21 +628,25 @@ def test_main_screen_clear_filters_resets_the_list() -> None:
 
     main_screen._clear_filters()
 
-    assert len(main_screen.event_list.children) == 1
+    assert len(main_screen.rows) == 1
     assert main_screen.name_filter.text == ""
     assert main_screen.sort_spinner.text == "Start: oldest first"
 
 
-def test_main_screen_reports_an_invalid_date_filter() -> None:
-    """An unparsable date filter reports the error and keeps the rows."""
+def test_main_screen_reports_a_reversed_date_range() -> None:
+    """A From date after the To date reports the error and keeps the rows."""
     _, main_screen, _ = _make_screens(FakeClient())
     main_screen._show_events([_sample_event()])
-    main_screen.date_from_filter.text = "not-a-date"
+    main_screen.date_from_filter.value = "2026-11-10"
+    main_screen.date_to_filter.value = "2026-11-09"
 
     main_screen._rebuild_view()
 
-    assert main_screen.status_label.text == "Use dates like YYYY-MM-DD."
-    assert len(main_screen.event_list.children) == 1
+    assert (
+        main_screen.status_label.text
+        == "The From date must be on or before the To date."
+    )
+    assert len(main_screen.rows) == 1
 
 
 def test_event_form_offers_backend_time_zones(
@@ -1056,14 +1060,14 @@ def test_time_lists_open_at_the_current_hour_and_minute(
     assert field.selected_choice == ""
 
 
-def test_typing_a_new_start_date_moves_the_end_date() -> None:
-    """Typing 2026-11-12 as the start date keeps 15:00-16:30 on that day."""
+def test_picking_a_new_start_date_moves_the_end_date() -> None:
+    """Picking 2026-11-12 as the start date keeps 15:00-16:30 on that day."""
     _, _, add_event_screen = _make_screens(FakeClient())
     add_event_screen.open_for(None)
     add_event_screen.start.text = "2026-11-09T15:00"
     add_event_screen.end.text = "2026-11-09T16:30"
 
-    add_event_screen.start.date_input.text = "2026-11-12"
+    add_event_screen.start.select_date(date(2026, 11, 12))
 
     assert add_event_screen.start.text == "2026-11-12T15:00"
     assert add_event_screen.end.text == "2026-11-12T16:30"
@@ -1076,25 +1080,9 @@ def test_an_overnight_event_keeps_its_length_when_the_date_changes() -> None:
     add_event_screen.start.text = "2026-11-09T22:00"
     add_event_screen.end.text = "2026-11-10T01:00"
 
-    add_event_screen.start.date_input.text = "2026-11-15"
+    add_event_screen.start.select_date(date(2026, 11, 15))
 
     assert add_event_screen.end.text == "2026-11-16T01:00"
-
-
-def test_a_half_typed_start_date_does_not_move_the_end() -> None:
-    """The end only follows once the typed start date is complete."""
-    _, _, add_event_screen = _make_screens(FakeClient())
-    add_event_screen.open_for(None)
-    add_event_screen.start.text = "2026-11-09T15:00"
-    add_event_screen.end.text = "2026-11-09T16:00"
-
-    add_event_screen.start.date_input.text = "2026-11-1"
-    assert add_event_screen.end.text == "2026-11-09T16:00"
-    add_event_screen.start.date_input.text = "2026-11-31"
-    assert add_event_screen.end.text == "2026-11-09T16:00"
-
-    add_event_screen.start.date_input.text = "2026-11-14"
-    assert add_event_screen.end.text == "2026-11-14T16:00"
 
 
 def test_an_all_day_end_date_moves_by_as_many_days_as_the_start() -> None:
@@ -1105,7 +1093,7 @@ def test_an_all_day_end_date_moves_by_as_many_days_as_the_start() -> None:
     add_event_screen.start.text = "2026-11-09"
     add_event_screen.end.text = "2026-11-11"
 
-    add_event_screen.start.date_input.text = "2026-11-20"
+    add_event_screen.start.select_date(date(2026, 11, 20))
 
     assert add_event_screen.end.text == "2026-11-22"
 
@@ -1119,3 +1107,126 @@ def test_dates_set_by_the_form_do_not_move_the_end() -> None:
     add_event_screen.start.text = "2026-12-01T10:00"
 
     assert add_event_screen.end.text == "2026-11-09T16:00"
+
+
+def test_month_grid_starts_on_monday_and_fills_six_weeks() -> None:
+    """November 2026 starts on a Sunday, so six blanks come first."""
+    from kivy_calendar.screens.date_picker import month_grid, shift_month
+
+    cells = month_grid(2026, 11)
+
+    assert len(cells) == 42
+    assert cells[:6] == [None] * 6
+    assert cells[6] == date(2026, 11, 1)
+    assert cells[35] == date(2026, 11, 30)
+    assert shift_month(date(2026, 12, 15), 1) == date(2027, 1, 1)
+    assert shift_month(date(2026, 1, 15), -1) == date(2025, 12, 1)
+
+
+def test_date_picker_reports_the_tapped_day() -> None:
+    """Tapping a day in the month view hands that date back."""
+    from kivy_calendar.screens.date_picker import DatePicker
+
+    picked: list[date | None] = []
+    picker = DatePicker(date(2026, 11, 9), picked.append)
+
+    assert picker.title_label.text == "November 2026"
+    assert len(picker.day_buttons) == 30
+    picker.show_month(1)
+    assert picker.title_label.text == "December 2026"
+    picker.day_buttons[2].dispatch("on_release")
+
+    assert picked == [date(2026, 12, 3)]
+
+
+def test_date_chip_shows_the_date_and_picks_through_the_calendar() -> None:
+    """The form's date chip reads Mon 9 Nov and moves the end with it."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+    add_event_screen.open_for(None)
+    add_event_screen.start.text = "2026-11-09T15:00"
+    add_event_screen.end.text = "2026-11-09T16:00"
+
+    assert add_event_screen.start.date_button.text.startswith("Mon 9 Nov")
+    add_event_screen.start.open_date_picker()
+    picker = add_event_screen.start.date_picker
+    assert picker is not None
+    picker.pick(date(2026, 11, 11))
+
+    assert add_event_screen.start.text == "2026-11-11T15:00"
+    assert add_event_screen.end.text == "2026-11-11T16:00"
+
+
+def test_delete_button_shows_only_for_an_existing_event() -> None:
+    """New events have no Delete button; opened events do."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+
+    add_event_screen.open_for(None)
+    assert add_event_screen.delete_button.parent is None
+
+    add_event_screen.open_for(_sample_event())
+    assert add_event_screen.delete_button.parent is not None
+
+    add_event_screen.open_for(None)
+    assert add_event_screen.delete_button.parent is None
+
+
+def test_event_list_groups_cards_under_day_headings() -> None:
+    """Events sorted by start sit under one heading per day."""
+    from kivy.uix.label import Label
+
+    _, main_screen, _ = _make_screens(FakeClient())
+    first = _sample_event()
+    second = replace(first, id="event-2", summary="Review")
+    third = replace(
+        first,
+        id="event-3",
+        summary="Retro",
+        start=first.start + timedelta(days=1),
+        end=first.end + timedelta(days=1),
+    )
+
+    main_screen._show_events([third, second, first])
+
+    headings = [
+        child.text
+        for child in reversed(main_screen.event_list.children)
+        if isinstance(child, Label)
+    ]
+    assert len(headings) == 2
+    assert headings[0].endswith("Mon 9 Nov")
+    assert [row.event.id for row in main_screen.rows] == [
+        "event-1",
+        "event-2",
+        "event-3",
+    ]
+
+
+def test_event_cards_show_the_calendar_name() -> None:
+    """Cards name their calendar once the calendars have loaded."""
+    from kivy_calendar.api import CalendarSummary
+
+    _, main_screen, _ = _make_screens(FakeClient())
+
+    main_screen._show_events(
+        [_sample_event()],
+        [CalendarSummary(id="work@example.com", summary="Work")],
+    )
+
+    labels = [
+        widget.text
+        for widget in main_screen.rows[0].walk()
+        if hasattr(widget, "text") and isinstance(widget.text, str)
+    ]
+    assert "Work" in labels
+
+
+def test_date_filter_chips_show_the_chosen_dates() -> None:
+    """Filter chips read From 9 Nov once a date is set, and reset on Clear."""
+    _, main_screen, _ = _make_screens(FakeClient())
+
+    assert main_screen.date_from_filter.text == "From date"
+    main_screen.date_from_filter.value = "2026-11-09"
+    assert main_screen.date_from_filter.text == "From 9 Nov"
+
+    main_screen._clear_filters()
+    assert main_screen.date_from_filter.text == "From date"

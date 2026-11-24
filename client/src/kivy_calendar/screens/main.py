@@ -4,70 +4,247 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from kivy.clock import Clock
+from kivy.graphics import BoxShadow
+from kivy.properties import StringProperty
+from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.label import Label
 from kivy.uix.screenmanager import Screen
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
-from kivy.uix.textinput import TextInput
-from kivy.utils import escape_markup
+from kivy.uix.widget import Widget
 
-from kivy_calendar.api import BackendClient, BackendError, CalendarEvent
+from kivy_calendar.api import (
+    BackendClient,
+    BackendError,
+    CalendarEvent,
+    CalendarSummary,
+)
 from kivy_calendar.filtering import (
     DEFAULT_SORT,
     DEFAULT_SORT_LABEL,
     SORT_BY_LABEL,
     SORT_LABELS,
+    SORT_NAME,
     SortOrder,
+    event_date,
     filter_events,
     parse_date_input,
     sort_events,
 )
-from kivy_calendar.formatting import format_event_when
-from kivy_calendar.screens.ui import wrapped_label
+from kivy_calendar.formatting import (
+    all_day_last_day,
+    day_heading,
+    event_clock,
+    is_happening,
+    short_date,
+)
+from kivy_calendar.screens.date_picker import DatePicker
+from kivy_calendar.screens.theme import (
+    BORDER,
+    CALENDAR_DOTS,
+    CORAL_DEEP_TEXT,
+    CORAL_TINT,
+    DEEP_SKY,
+    DIVIDER,
+    FONT,
+    FONT_BOLD,
+    FONT_SEMIBOLD,
+    INK,
+    MUTED,
+    NOW_TINT,
+    SKY_SOFT,
+    SURFACE,
+    FlatButton,
+    FlatSpinner,
+    IconView,
+    Paint,
+    fit_width,
+    icon_button,
+    primary_button,
+)
+from kivy_calendar.screens.ui import StatusBanner, input_box, plain_input
 
-ERROR_COLOR = (0.95, 0.42, 0.42, 1)
-STATUS_COLOR = (0.68, 0.68, 0.68, 1)
-ROW_COLOR = (0.16, 0.18, 0.22, 1)
+CARD_HEIGHT = 68
+SORT_CHIP_WIDTH = 170
 
 
-class EventRow(Button):
-    """A tappable event row with a bold summary and its time span."""
+def _text(text: str, **kwargs: Any) -> Label:
+    """Return a one-line label that is as wide as its text."""
+    kwargs.setdefault("font_name", FONT)
+    kwargs.setdefault("color", INK)
+    label = Label(text=text, size_hint=(None, None), **kwargs)
+    label.bind(texture_size=label.setter("size"))
+    label.texture_update()
+    label.size = label.texture_size
+    return label
+
+
+def _dot(color: Any) -> Widget:
+    """Return a small round color marker."""
+    dot = Widget(size_hint=(None, None), size=(8, 8))
+    Paint(dot, color, radius=4)
+    return dot
+
+
+class EventRow(ButtonBehavior, BoxLayout):
+    """A tappable event card: times on the left, name and calendar right."""
 
     def __init__(
         self,
         event: CalendarEvent,
         open_event: Callable[[CalendarEvent], None],
+        *,
+        calendar_name: str = "",
+        dot_color: Any = CALENDAR_DOTS[0],
+        show_date: bool = False,
+        now: datetime | None = None,
         **kwargs: Any,
     ) -> None:
-        """Create the row from an event."""
-        summary = escape_markup(event.summary or "Untitled event")
-        when = escape_markup(format_event_when(event))
+        """Create the card from an event."""
         super().__init__(
-            text=f"[b]{summary}[/b]\n{when}",
-            markup=True,
-            halign="left",
-            valign="middle",
+            orientation="horizontal",
             size_hint_y=None,
-            height=72,
-            background_normal="",
-            background_down="",
-            background_color=ROW_COLOR,
+            height=CARD_HEIGHT,
+            padding=(14, 12),
+            spacing=14,
             **kwargs,
         )
         self.event = event
+        happening = is_happening(event, now)
+        self.paint = Paint(
+            self,
+            NOW_TINT if happening else SURFACE,
+            radius=14,
+            border=None if happening else DIVIDER,
+        )
         self.bind(on_release=lambda *_: open_event(event))
-        self.bind(width=self._sync_text_size)
-        self._sync_text_size()
 
-    def _sync_text_size(self, *args: Any) -> None:
-        """Keep the wrapped text width in sync with the row width."""
-        width = self.width if self.width > 24 else 24
-        self.text_size = (width - 24, None)
+        times = BoxLayout(orientation="vertical", size_hint_x=None, width=50, spacing=2)
+        if event.all_day:
+            tag = _text(
+                "All day",
+                font_name=FONT_SEMIBOLD,
+                font_size="11sp",
+                color=CORAL_DEEP_TEXT,
+                padding=(6, 3),
+            )
+            Paint(tag, CORAL_TINT, radius=6)
+            times.add_widget(tag)
+            times.add_widget(Widget())
+        else:
+            start, end = event_clock(event)
+            times.add_widget(_text(start, font_name=FONT_SEMIBOLD, font_size="15sp"))
+            times.add_widget(_text(end, font_size="12sp", color=MUTED))
+            times.add_widget(Widget())
+        self.add_widget(times)
+
+        details = BoxLayout(orientation="vertical", spacing=4)
+        summary = Label(
+            text=event.summary or "Untitled event",
+            font_name=FONT_SEMIBOLD,
+            font_size="15sp",
+            color=INK,
+            halign="left",
+            valign="middle",
+            shorten=True,
+            shorten_from="right",
+            size_hint_y=None,
+            height=20,
+        )
+        summary.bind(
+            width=lambda label, width: setattr(label, "text_size", (width, None))
+        )
+        details.add_widget(summary)
+
+        meta_parts: list[str] = []
+        if calendar_name:
+            meta_parts.append(calendar_name)
+        day = event_date(event)
+        if show_date:
+            meta_parts.append(short_date(day))
+        if event.all_day and all_day_last_day(event) > event.start.date():
+            meta_parts.append(f"until {short_date(all_day_last_day(event))}")
+        meta = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=16, spacing=6
+        )
+        if calendar_name:
+            meta_box = BoxLayout(size_hint=(None, 1), width=8, padding=(0, 4))
+            meta_box.add_widget(_dot(dot_color))
+            meta.add_widget(meta_box)
+        meta.add_widget(_text(" · ".join(meta_parts), font_size="12sp", color=MUTED))
+        meta.add_widget(Widget())
+        details.add_widget(meta)
+        details.add_widget(Widget())
+        self.add_widget(details)
+
+        if happening:
+            now_box = BoxLayout(orientation="vertical", size_hint_x=None, width=40)
+            pill = _text(
+                "Now",
+                font_name=FONT_SEMIBOLD,
+                font_size="11sp",
+                color=SURFACE,
+                padding=(8, 3),
+            )
+            Paint(pill, DEEP_SKY, radius=None)
+            now_box.add_widget(pill)
+            now_box.add_widget(Widget())
+            self.add_widget(now_box)
+
+
+class DateFilterChip(FlatButton):
+    """A filter pill that opens the month picker; ``value`` is ISO or blank."""
+
+    value = StringProperty("")
+
+    def __init__(self, prefix: str, **kwargs: Any) -> None:
+        """Create the chip, e.g. ``From 24 Nov`` or ``From date``."""
+        super().__init__(
+            text="",
+            fill=SURFACE,
+            border=BORDER,
+            text_color=MUTED,
+            radius=None,
+            font_name=FONT,
+            font_size="13sp",
+            size_hint=(None, None),
+            height=34,
+            **kwargs,
+        )
+        fit_width(self, 28)
+        self.prefix = prefix
+        self.picker: DatePicker | None = None
+        self.bind(value=self._show_value, on_release=lambda *_: self.open_picker())
+        self._show_value()
+
+    def open_picker(self) -> None:
+        """Open the month picker with a Clear button."""
+        self.picker = DatePicker(
+            parse_date_input(self.value), self._on_pick, allow_clear=True
+        )
+        if self.get_parent_window() is not None:
+            self.picker.open()
+
+    def _on_pick(self, day: date | None) -> None:
+        """Store the picked day, or clear the filter."""
+        self.picker = None
+        self.value = day.isoformat() if day is not None else ""
+
+    def _show_value(self, *_: Any) -> None:
+        """Show the date and highlight the chip while a date is set."""
+        day = parse_date_input(self.value)
+        if day is not None:
+            self.text = f"{self.prefix} {day.day} {day:%b}"
+            self.set_colors(fill=SKY_SOFT, border=None, text=INK)
+        else:
+            self.text = f"{self.prefix} date" if not self.value else self.value
+            self.set_colors(fill=SURFACE, border=BORDER, text=MUTED)
 
 
 class MainScreen(Screen):
@@ -85,126 +262,130 @@ class MainScreen(Screen):
         self.configuration_error = configuration_error
         self.events: list[CalendarEvent] = []
         self._notice = ""
+        # Calendar names and dot colors for the cards; loaded once, and the
+        # list still works without them.
+        self._calendar_names: dict[str, str] = {}
+        self._calendar_dots: dict[str, Any] = {}
+        self._calendars_loaded = False
 
-        self.title = wrapped_label(
-            text="Kivy Calendar",
-            bold=True,
-            font_size="22sp",
-            size_hint_y=None,
-            height=48,
+        today = datetime.now()
+        self.date_label = _text(
+            f"{today:%A}, {today.day} {today:%B}", font_size="13sp", color=MUTED
         )
-        self.refresh_button = Button(text="Refresh", size_hint=(None, 1), width=110)
-        self.refresh_button.bind(on_press=lambda *_: self.load_events())
-        self.sync_button = Button(text="Sync", size_hint=(None, 1), width=90)
+        self.title = _text("Calendar", font_name=FONT_BOLD, font_size="28sp")
+        title_box = BoxLayout(orientation="vertical", spacing=2)
+        title_box.add_widget(self.date_label)
+        title_box.add_widget(self.title)
+        self.sync_button = icon_button("sync")
         self.sync_button.bind(on_press=lambda *_: self.sync_events())
+        self.refresh_button = icon_button("refresh")
+        self.refresh_button.bind(on_press=lambda *_: self.load_events())
         header = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=48,
+            height=60,
             spacing=8,
         )
+        header.add_widget(title_box)
         header.add_widget(self.sync_button)
         header.add_widget(self.refresh_button)
-        header.add_widget(self.title)
 
-        self.status_label = wrapped_label(
-            size_hint_y=None,
-            height=40,
-            font_size="14sp",
-            color=STATUS_COLOR,
-        )
+        self.status_label = StatusBanner()
 
-        self.name_filter = TextInput(
-            hint_text="Filter by name",
-            size_hint_y=None,
-            height=40,
-            padding=(10, 10),
+        self.name_filter = plain_input("Filter by name", padding=(0, 12))
+        self.clear_filters_button = icon_button("close", radius=12, text_color=MUTED)
+        search_row = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=44, spacing=8
         )
-        self.date_from_filter = TextInput(
-            hint_text="From date",
-            size_hint_y=None,
-            height=40,
-            padding=(10, 10),
-        )
-        self.date_to_filter = TextInput(
-            hint_text="To date",
-            size_hint_y=None,
-            height=40,
-            padding=(10, 10),
-        )
-        self.sort_spinner = Spinner(
+        search_icon = BoxLayout(size_hint_x=None, width=18, padding=(0, 13))
+        search_icon.add_widget(IconView("search"))
+        search_row.add_widget(input_box(search_icon, self.name_filter))
+        search_row.add_widget(self.clear_filters_button)
+
+        self.date_from_filter = DateFilterChip("From")
+        self.date_to_filter = DateFilterChip("To")
+        self.sort_spinner = FlatSpinner(
             text=DEFAULT_SORT_LABEL,
             values=SORT_LABELS,
-            size_hint_y=None,
-            size_hint_x=0.8,
-            height=40,
+            radius=None,
+            font_size="13sp",
+            size_hint=(None, None),
+            size=(SORT_CHIP_WIDTH, 34),
         )
-        self.clear_filters_button = Button(
-            text="Clear",
-            size_hint_y=None,
-            height=40,
-            size_hint_x=None,
-            width=90,
+        self.sort_spinner.color = MUTED
+        self.filter_panel = BoxLayout(
+            orientation="horizontal", size_hint_y=None, height=34, spacing=8
         )
+        self.filter_panel.add_widget(self.date_from_filter)
+        self.filter_panel.add_widget(self.date_to_filter)
+        self.filter_panel.add_widget(self.sort_spinner)
+        self.filter_panel.add_widget(Widget())
+
         self.name_filter.bind(text=self._schedule_apply_filters)
-        self.date_from_filter.bind(text=self._schedule_apply_filters)
-        self.date_to_filter.bind(text=self._schedule_apply_filters)
+        self.date_from_filter.bind(value=self._schedule_apply_filters)
+        self.date_to_filter.bind(value=self._schedule_apply_filters)
         self.sort_spinner.bind(text=self._on_sort_changed)
-        self.clear_filters_button.bind(on_press=self._clear_filters)
+        self.clear_filters_button.bind(on_press=lambda *_: self._clear_filters())
         self._sort_order: SortOrder = DEFAULT_SORT
         self._filter_debounce: Any = None
-
-        self.filter_panel = BoxLayout(
-            orientation="vertical",
-            size_hint_y=None,
-            height=136,
-            spacing=4,
-            padding=(0, 4),
-        )
-        self.filter_panel.add_widget(self.name_filter)
-        self.date_filters = BoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=40,
-            spacing=4,
-        )
-        self.date_filters.add_widget(self.date_to_filter)
-        self.date_filters.add_widget(self.date_from_filter)
-        self.filter_panel.add_widget(self.date_filters)
-        self.sort_row = BoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=40,
-            spacing=4,
-        )
-        self.sort_row.add_widget(self.clear_filters_button)
-        self.sort_row.add_widget(self.sort_spinner)
-        self.filter_panel.add_widget(self.sort_row)
 
         self.event_list = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
-            spacing=4,
+            spacing=8,
+            # Room below the last card so the New event button never covers it.
+            padding=(0, 0, 0, 96),
         )
         self.event_list.bind(minimum_height=self.event_list.setter("height"))
-        scroll_view = ScrollView(bar_width=6)
+        scroll_view = ScrollView(bar_width=4, bar_color=(*DEEP_SKY[:3], 0.4))
         scroll_view.add_widget(self.event_list)
 
-        self.add_button = Button(
-            text="Add event",
-            size_hint_y=None,
-            height=52,
-            font_size="16sp",
+        content = BoxLayout(
+            orientation="vertical",
+            padding=(20, 24, 20, 0),
+            spacing=12,
         )
+        content.add_widget(header)
+        content.add_widget(self.status_label)
+        content.add_widget(search_row)
+        content.add_widget(self.filter_panel)
+        content.add_widget(scroll_view)
+
+        self.add_button = primary_button(
+            "New event",
+            icon="plus",
+            font_size="16sp",
+            size_hint=(None, None),
+            size=(164, 56),
+        )
+        with self.add_button.canvas.before:
+            shadow = BoxShadow(
+                color=(*DEEP_SKY[:3], 0.25),
+                blur_radius=18,
+                offset=(0, -4),
+                border_radius=(28, 28, 28, 28),
+            )
+        # Draw the shadow beneath the button's fill.
+        self.add_button.canvas.before.remove(shadow)
+        self.add_button.canvas.before.insert(0, shadow)
+
+        def follow_button(*_: Any) -> None:
+            shadow.pos = self.add_button.pos
+            shadow.size = self.add_button.size
+
+        self.add_button.bind(pos=follow_button, size=follow_button)
         self.add_button.bind(on_press=self.open_add_event)
 
-        layout = BoxLayout(orientation="vertical", padding=12, spacing=8)
-        layout.add_widget(self.add_button)
-        layout.add_widget(scroll_view)
-        layout.add_widget(self.filter_panel)
-        layout.add_widget(self.status_label)
-        layout.add_widget(header)
-        self.add_widget(layout)
+        root = FloatLayout()
+        root.add_widget(content)
+        root.add_widget(self.add_button)
+
+        def place_button(*_: Any) -> None:
+            right = root.x + root.width
+            self.add_button.pos = (right - self.add_button.width - 20, root.y + 24)
+
+        root.bind(pos=place_button, size=place_button)
+        self.add_widget(root)
 
         if self.client is None:
             self.add_button.disabled = True
@@ -214,6 +395,15 @@ class MainScreen(Screen):
             )
         else:
             self._set_status("Events have not been loaded yet.")
+
+    @property
+    def rows(self) -> list[EventRow]:
+        """Return the event cards from top to bottom."""
+        return [
+            child
+            for child in reversed(self.event_list.children)
+            if isinstance(child, EventRow)
+        ]
 
     def load_events(self) -> None:
         """Fetch events from the backend in a background thread."""
@@ -245,7 +435,14 @@ class MainScreen(Screen):
                 )
             )
             return
-        Clock.schedule_once(lambda *_: self._show_events(events))
+        calendars: list[CalendarSummary] | None = None
+        if not self._calendars_loaded:
+            try:
+                calendars = client.list_calendars()
+            except BackendError:
+                # Names are a nicety; the cards simply leave them out.
+                calendars = None
+        Clock.schedule_once(lambda *_: self._show_events(events, calendars))
 
     def sync_events(self) -> None:
         """Rebuild the backend cache in a background thread."""
@@ -293,29 +490,47 @@ class MainScreen(Screen):
         self._notice = text
         self._set_status(text)
 
-    def _show_events(self, events: list[CalendarEvent]) -> None:
+    def _show_events(
+        self,
+        events: list[CalendarEvent],
+        calendars: list[CalendarSummary] | None = None,
+    ) -> None:
         """Replace the event list and re-apply the current filters."""
         self.events = events
+        if calendars is not None:
+            self._remember_calendars(calendars)
         self._rebuild_view()
+
+    def _remember_calendars(self, calendars: list[CalendarSummary]) -> None:
+        """Keep calendar names and give each calendar a dot color."""
+        ordered = sorted(calendars, key=lambda calendar: not calendar.primary)
+        for index, calendar in enumerate(ordered):
+            dot = CALENDAR_DOTS[index % len(CALENDAR_DOTS)]
+            self._calendar_names[calendar.id] = calendar.summary
+            self._calendar_dots[calendar.id] = dot
+            if calendar.primary:
+                self._calendar_names["primary"] = calendar.summary
+                self._calendar_dots["primary"] = dot
+        self._calendars_loaded = True
 
     def _rebuild_view(self) -> None:
         """Filter, sort and render the events matching the current inputs."""
         date_from: date | None = None
         date_to: date | None = None
-        date_from_text = self.date_from_filter.text.strip()
-        date_to_text = self.date_to_filter.text.strip()
+        date_from_text = self.date_from_filter.value.strip()
+        date_to_text = self.date_to_filter.value.strip()
         if date_from_text or date_to_text:
             date_from = parse_date_input(date_from_text)
             date_to = parse_date_input(date_to_text)
-            invalid = (date_from_text and date_from is None) or (
+            if (date_from_text and date_from is None) or (
                 date_to_text and date_to is None
-            )
-            if not invalid and (
-                date_from is not None and date_to is not None and date_from > date_to
             ):
-                invalid = True
-            if invalid:
                 self._set_status("Use dates like YYYY-MM-DD.", error=True)
+                return
+            if date_from is not None and date_to is not None and date_from > date_to:
+                self._set_status(
+                    "The From date must be on or before the To date.", error=True
+                )
                 return
         visible = sort_events(
             filter_events(
@@ -332,12 +547,12 @@ class MainScreen(Screen):
             or date_to_text
             or self._sort_order != DEFAULT_SORT,
         )
+        self.event_list.clear_widgets()
         if not visible:
-            self.event_list.clear_widgets()
             self._set_status(
                 "No events match the filters."
                 if filtered
-                else "No events yet. Tap Add event to create one.",
+                else "No events yet. Tap New event to create one.",
             )
             return
         count_text = f"{len(visible)} event" + ("" if len(visible) == 1 else "s")
@@ -345,9 +560,43 @@ class MainScreen(Screen):
             count_text = f"{count_text}. {self._notice}"
             self._notice = ""
         self._set_status(count_text)
-        self.event_list.clear_widgets()
-        for event in reversed(visible):
-            self.event_list.add_widget(EventRow(event, self.open_event))
+        by_name = self._sort_order == SORT_NAME
+        today = date.today()
+        now = datetime.now().astimezone()
+        heading_day: date | None = None
+        for event in visible:
+            day = event_date(event)
+            if not by_name and day != heading_day:
+                heading_day = day
+                self.event_list.add_widget(self._day_heading(day, today))
+            self.event_list.add_widget(
+                EventRow(
+                    event,
+                    self.open_event,
+                    calendar_name=self._calendar_names.get(event.calendar_id, ""),
+                    dot_color=self._calendar_dots.get(
+                        event.calendar_id, CALENDAR_DOTS[0]
+                    ),
+                    show_date=by_name,
+                    now=now,
+                )
+            )
+
+    @staticmethod
+    def _day_heading(day: date, today: date) -> Label:
+        """Return the heading shown above a day's events."""
+        label = Label(
+            text=day_heading(day, today),
+            font_name=FONT_SEMIBOLD,
+            font_size="13sp",
+            color=MUTED,
+            halign="left",
+            valign="bottom",
+            size_hint_y=None,
+            height=30,
+        )
+        label.bind(size=lambda widget, size: setattr(widget, "text_size", size))
+        return label
 
     def _schedule_apply_filters(self, *args: Any) -> None:
         """Debounce text-input driven filtering before re-rendering."""
@@ -374,16 +623,15 @@ class MainScreen(Screen):
     def _clear_filters(self) -> None:
         """Reset every filter input and re-render the full list."""
         self.name_filter.text = ""
-        self.date_from_filter.text = ""
-        self.date_to_filter.text = ""
+        self.date_from_filter.value = ""
+        self.date_to_filter.value = ""
         self.sort_spinner.text = DEFAULT_SORT_LABEL
         self._sort_order = DEFAULT_SORT
         self._rebuild_view()
 
     def _set_status(self, text: str, *, error: bool = False) -> None:
         """Show a status or error message above the event list."""
-        self.status_label.text = text
-        self.status_label.color = ERROR_COLOR if error else STATUS_COLOR
+        self.status_label.show(text, error=error)
 
     def open_event(self, event: CalendarEvent) -> None:
         """Open the event form for an existing event."""

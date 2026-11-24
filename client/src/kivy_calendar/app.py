@@ -9,6 +9,7 @@ from kivy.uix.screenmanager import ScreenManager
 from kivy_calendar.api import TOKEN_ENV, BackendClient
 from kivy_calendar.screens.add_event import AddEventScreen
 from kivy_calendar.screens.main import MainScreen
+from kivy_calendar.screens.theme import BACKGROUND
 
 
 def build_client() -> tuple[BackendClient | None, str | None]:
@@ -35,6 +36,7 @@ class KivyCalendarApp(App):
     def build(self) -> ScreenManager:
         """Build the screen manager with the main and add-event screens."""
         Window.size = (420, 760)
+        Window.clearcolor = BACKGROUND
         client, configuration_error = build_client()
         screen_manager = ScreenManager()
         main_screen = MainScreen(
