@@ -171,6 +171,9 @@ class PhoneCalendarService:
         try:
             self._account_sync.request(accounts)
             deadline = self._clock() + self._sync_timeout
+            # Android may not report a just-requested sync as pending yet, so
+            # give it one poll before the first "still busy?" check.
+            self._sleep(self._sync_poll)
             while self._account_sync.busy(accounts) and self._clock() < deadline:
                 self._sleep(self._sync_poll)
         except Exception as error:  # noqa: BLE001 - JNI raises JavaException

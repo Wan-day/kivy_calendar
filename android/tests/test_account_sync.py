@@ -69,7 +69,8 @@ def test_waits_until_not_busy() -> None:
     sync = FakeAccountSync(busy_polls=3)
     clock = Clock()
     _service([calendar_row(1, "Main")], sync, clock).sync()
-    assert clock.sleeps == [1, 1, 1]
+    # One grace poll after the request, then one per busy answer.
+    assert clock.sleeps == [1, 1, 1, 1]
     assert sync.polls == 4
 
 
@@ -100,3 +101,15 @@ def test_busy_failure_becomes_service_error() -> None:
 
     with pytest.raises(ServiceError):
         _service([calendar_row(1, "Main")], Broken(), Clock()).sync()
+
+
+def test_waits_one_poll_before_the_first_busy_check() -> None:
+    """A sync Android has not registered yet does not count as finished."""
+    clock = Clock()
+    sync = FakeAccountSync()
+    service = _service([calendar_row(1, "Mine")], sync, clock)
+
+    service.sync()
+
+    assert clock.sleeps[:1] == [1.0]
+    assert sync.polls == 1
