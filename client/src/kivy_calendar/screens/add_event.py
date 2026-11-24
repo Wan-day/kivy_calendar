@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -264,8 +264,20 @@ class AddEventScreen(Screen):
 
         self.open_for(event)
 
-    def open_for(self, event: CalendarEvent | None) -> None:
-        """Fill the form for creating a new event or editing ``event``."""
+    def open_for(
+        self,
+        event: CalendarEvent | None,
+        *,
+        start: datetime | None = None,
+        all_day: bool = False,
+    ) -> None:
+        """Fill the form for creating a new event or editing ``event``.
+
+        For a new event, ``start`` (an aware datetime) prefills the start in
+        the form's time zone with the usual one-hour length, and ``all_day``
+        makes it an all-day event on that date.  Both are ignored when
+        editing.
+        """
         self.event = event
         self._new_event_id = uuid4().hex if event is None else ""
         # Services that cannot edit repeating occurrences (the phone calendar)
@@ -279,6 +291,8 @@ class AddEventScreen(Screen):
         if event is None:
             self.title_label.text = "New event"
             self._reset_form()
+            if start is not None:
+                self._prefill_start(start, all_day)
         else:
             self.title_label.text = "Edit event"
             self.all_day.active = event.all_day
@@ -867,6 +881,27 @@ class AddEventScreen(Screen):
         start, end = default_event_times(now)
         self.start.text = self._wall_clock(start, self.time_zone)
         self.end.text = self._wall_clock(end, self.time_zone)
+
+    def _prefill_start(self, start: datetime, all_day: bool) -> None:
+        """Prefill a new event that begins at ``start`` and lasts one hour."""
+        try:
+            # Go through UTC: same-zone astimezone() would keep a gap time as is.
+            local = start.astimezone(UTC).astimezone(ZoneInfo(self.time_zone))
+        except (ValueError, ZoneInfoNotFoundError):
+            local = start
+        # Add the hour in UTC: wall-clock arithmetic can land in a DST gap.
+        hour = timedelta(hours=1)
+        end = (local.astimezone(UTC) + hour).astimezone(local.tzinfo)
+        # The form stores wall-clock text; keep end after start on round trip.
+        while end.replace(fold=0).replace(tzinfo=None) <= local.replace(
+            tzinfo=None
+        ):
+            end = (end.astimezone(UTC) + hour).astimezone(local.tzinfo)
+        self.start.text = self._wall_clock(local, self.time_zone)
+        self.end.text = self._wall_clock(end, self.time_zone)
+        if all_day:
+            # The all-day switch keeps the date of the start text.
+            self.all_day.active = True
 
     @staticmethod
     def _wall_clock(value: datetime, zone: str) -> str:

@@ -686,3 +686,12 @@ class MainScreen(Screen):
         form = manager.get_screen("add_event")
         form.open_for(None)
         manager.current = "add_event"
+
+    def open_add_event_at(self, start: datetime, all_day: bool = False) -> None:
+        """Open the event form for a new event starting at ``start``."""
+        manager = self.manager
+        if manager is None:
+            return
+        form = manager.get_screen("add_event")
+        form.open_for(None, start=start, all_day=all_day)
+        manager.current = "add_event"
