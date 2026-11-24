@@ -9,6 +9,7 @@ from typing import Any
 
 from kivy.clock import Clock
 from kivy.graphics import BoxShadow
+from kivy.metrics import dp
 from kivy.properties import StringProperty
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
@@ -71,8 +72,8 @@ from kivy_calendar.screens.theme import (
 from kivy_calendar.screens.ui import StatusBanner, input_box, plain_input
 from kivy_calendar.service import CalendarService
 
-CARD_HEIGHT = 68
-SORT_CHIP_WIDTH = 170
+CARD_HEIGHT = dp(68)
+SORT_CHIP_WIDTH = dp(170)
 
 
 def _text(text: str, **kwargs: Any) -> Label:
@@ -88,7 +89,7 @@ def _text(text: str, **kwargs: Any) -> Label:
 
 def _dot(color: Any) -> Widget:
     """Return a small round color marker."""
-    dot = Widget(size_hint=(None, None), size=(8, 8))
+    dot = Widget(size_hint=(None, None), size=(dp(8), dp(8)))
     Paint(dot, color, radius=4)
     return dot
 
@@ -112,8 +113,8 @@ class EventRow(ButtonBehavior, BoxLayout):
             orientation="horizontal",
             size_hint_y=None,
             height=CARD_HEIGHT,
-            padding=(14, 12),
-            spacing=14,
+            padding=(dp(14), dp(12)),
+            spacing=dp(14),
             **kwargs,
         )
         self.event = event
@@ -126,14 +127,16 @@ class EventRow(ButtonBehavior, BoxLayout):
         )
         self.bind(on_release=lambda *_: open_event(event))
 
-        times = BoxLayout(orientation="vertical", size_hint_x=None, width=50, spacing=2)
+        times = BoxLayout(
+            orientation="vertical", size_hint_x=None, width=dp(50), spacing=dp(2)
+        )
         if event.all_day:
             tag = _text(
                 "All day",
                 font_name=FONT_SEMIBOLD,
                 font_size="11sp",
                 color=CORAL_DEEP_TEXT,
-                padding=(6, 3),
+                padding=(dp(6), dp(3)),
             )
             Paint(tag, CORAL_TINT, radius=6)
             times.add_widget(tag)
@@ -145,7 +148,7 @@ class EventRow(ButtonBehavior, BoxLayout):
             times.add_widget(Widget())
         self.add_widget(times)
 
-        details = BoxLayout(orientation="vertical", spacing=4)
+        details = BoxLayout(orientation="vertical", spacing=dp(4))
         summary = Label(
             text=event.summary or "Untitled event",
             font_name=FONT_SEMIBOLD,
@@ -156,7 +159,7 @@ class EventRow(ButtonBehavior, BoxLayout):
             shorten=True,
             shorten_from="right",
             size_hint_y=None,
-            height=20,
+            height=dp(20),
         )
         summary.bind(
             width=lambda label, width: setattr(label, "text_size", (width, None))
@@ -172,10 +175,10 @@ class EventRow(ButtonBehavior, BoxLayout):
         if event.all_day and all_day_last_day(event) > event.start.date():
             meta_parts.append(f"until {short_date(all_day_last_day(event))}")
         meta = BoxLayout(
-            orientation="horizontal", size_hint_y=None, height=16, spacing=6
+            orientation="horizontal", size_hint_y=None, height=dp(16), spacing=dp(6)
         )
         if calendar_name:
-            meta_box = BoxLayout(size_hint=(None, 1), width=8, padding=(0, 4))
+            meta_box = BoxLayout(size_hint=(None, 1), width=dp(8), padding=(0, dp(4)))
             meta_box.add_widget(_dot(dot_color))
             meta.add_widget(meta_box)
         meta.add_widget(_text(" · ".join(meta_parts), font_size="12sp", color=MUTED))
@@ -185,13 +188,13 @@ class EventRow(ButtonBehavior, BoxLayout):
         self.add_widget(details)
 
         if happening:
-            now_box = BoxLayout(orientation="vertical", size_hint_x=None, width=40)
+            now_box = BoxLayout(orientation="vertical", size_hint_x=None, width=dp(40))
             pill = _text(
                 "Now",
                 font_name=FONT_SEMIBOLD,
                 font_size="11sp",
                 color=SURFACE,
-                padding=(8, 3),
+                padding=(dp(8), dp(3)),
             )
             Paint(pill, DEEP_SKY, radius=None)
             now_box.add_widget(pill)
@@ -215,7 +218,7 @@ class DateFilterChip(FlatButton):
             font_name=FONT,
             font_size="13sp",
             size_hint=(None, None),
-            height=34,
+            height=dp(34),
             **kwargs,
         )
         fit_width(self, 28)
@@ -277,7 +280,7 @@ class MainScreen(Screen):
         self.version_label = _text(f"v{__version__}", font_size="12sp", color=MUTED)
         # Sit the version on the title's baseline, to its right.
         version_box = BoxLayout(
-            orientation="vertical", size_hint_x=None, padding=(0, 0, 0, 5)
+            orientation="vertical", size_hint_x=None, padding=(0, 0, 0, dp(5))
         )
         version_box.add_widget(Widget())
         version_box.add_widget(self.version_label)
@@ -285,11 +288,11 @@ class MainScreen(Screen):
             width=lambda _, width: setattr(version_box, "width", width)
         )
         version_box.width = self.version_label.width
-        title_row = BoxLayout(orientation="horizontal", spacing=8)
+        title_row = BoxLayout(orientation="horizontal", spacing=dp(8))
         title_row.add_widget(self.title)
         title_row.add_widget(version_box)
         title_row.add_widget(Widget())
-        title_box = BoxLayout(orientation="vertical", spacing=2)
+        title_box = BoxLayout(orientation="vertical", spacing=dp(2))
         title_box.add_widget(self.date_label)
         title_box.add_widget(title_row)
         self.sync_button = icon_button("sync")
@@ -299,8 +302,8 @@ class MainScreen(Screen):
         header = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=60,
-            spacing=8,
+            height=dp(60),
+            spacing=dp(8),
         )
         header.add_widget(title_box)
         header.add_widget(self.sync_button)
@@ -308,12 +311,12 @@ class MainScreen(Screen):
 
         self.status_label = StatusBanner()
 
-        self.name_filter = plain_input("Filter by name", padding=(0, 12))
+        self.name_filter = plain_input("Filter by name", padding=(0, dp(12)))
         self.clear_filters_button = icon_button("close", radius=12, text_color=MUTED)
         search_row = BoxLayout(
-            orientation="horizontal", size_hint_y=None, height=44, spacing=8
+            orientation="horizontal", size_hint_y=None, height=dp(44), spacing=dp(8)
         )
-        search_icon = BoxLayout(size_hint_x=None, width=18, padding=(0, 13))
+        search_icon = BoxLayout(size_hint_x=None, width=dp(18), padding=(0, dp(13)))
         search_icon.add_widget(IconView("search"))
         search_row.add_widget(input_box(search_icon, self.name_filter))
         search_row.add_widget(self.clear_filters_button)
@@ -326,11 +329,11 @@ class MainScreen(Screen):
             radius=None,
             font_size="13sp",
             size_hint=(None, None),
-            size=(SORT_CHIP_WIDTH, 34),
+            size=(SORT_CHIP_WIDTH, dp(34)),
         )
         self.sort_spinner.color = MUTED
         self.filter_panel = BoxLayout(
-            orientation="horizontal", size_hint_y=None, height=34, spacing=8
+            orientation="horizontal", size_hint_y=None, height=dp(34), spacing=dp(8)
         )
         self.filter_panel.add_widget(self.date_from_filter)
         self.filter_panel.add_widget(self.date_to_filter)
@@ -348,18 +351,18 @@ class MainScreen(Screen):
         self.event_list = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
-            spacing=8,
+            spacing=dp(8),
             # Room below the last card so the New event button never covers it.
-            padding=(0, 0, 0, 96),
+            padding=(0, 0, 0, dp(96)),
         )
         self.event_list.bind(minimum_height=self.event_list.setter("height"))
-        scroll_view = ScrollView(bar_width=4, bar_color=(*DEEP_SKY[:3], 0.4))
+        scroll_view = ScrollView(bar_width=dp(4), bar_color=(*DEEP_SKY[:3], 0.4))
         scroll_view.add_widget(self.event_list)
 
         content = BoxLayout(
             orientation="vertical",
-            padding=(20, 24, 20, 0),
-            spacing=12,
+            padding=(dp(20), dp(24), dp(20), 0),
+            spacing=dp(12),
         )
         content.add_widget(header)
         content.add_widget(self.status_label)
@@ -372,14 +375,14 @@ class MainScreen(Screen):
             icon="plus",
             font_size="16sp",
             size_hint=(None, None),
-            size=(164, 56),
+            size=(dp(164), dp(56)),
         )
         with self.add_button.canvas.before:
             shadow = BoxShadow(
                 color=(*DEEP_SKY[:3], 0.25),
-                blur_radius=18,
-                offset=(0, -4),
-                border_radius=(28, 28, 28, 28),
+                blur_radius=dp(18),
+                offset=(0, dp(-4)),
+                border_radius=(dp(28), dp(28), dp(28), dp(28)),
             )
         # Draw the shadow beneath the button's fill.
         self.add_button.canvas.before.remove(shadow)
@@ -398,7 +401,10 @@ class MainScreen(Screen):
 
         def place_button(*_: Any) -> None:
             right = root.x + root.width
-            self.add_button.pos = (right - self.add_button.width - 20, root.y + 24)
+            self.add_button.pos = (
+                right - self.add_button.width - dp(20),
+                root.y + dp(24),
+            )
 
         root.bind(pos=place_button, size=place_button)
         self.add_widget(root)
@@ -613,7 +619,7 @@ class MainScreen(Screen):
             halign="left",
             valign="bottom",
             size_hint_y=None,
-            height=30,
+            height=dp(30),
         )
         label.bind(size=lambda widget, size: setattr(widget, "text_size", size))
         return label

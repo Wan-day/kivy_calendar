@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
+from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
@@ -35,9 +36,9 @@ from kivy_calendar.screens.theme import (
 )
 from kivy_calendar.screens.ui import caption, wrapped_label
 
-ROW_HEIGHT = 36
-GRID_ROW_HEIGHT = 44
-SHEET_HEIGHT = 590
+ROW_HEIGHT = dp(36)
+GRID_ROW_HEIGHT = dp(44)
+SHEET_HEIGHT = dp(590)
 MINUTE_STEP = 5
 DATE_PLACEHOLDER = "Pick date"
 TIME_PLACEHOLDER = "Pick time"
@@ -84,7 +85,7 @@ class DateTimeField(BoxLayout):
         kwargs.setdefault("orientation", "horizontal")
         kwargs.setdefault("size_hint", (None, None))
         kwargs.setdefault("height", ROW_HEIGHT)
-        kwargs.setdefault("spacing", 8)
+        kwargs.setdefault("spacing", dp(8))
         super().__init__(**kwargs)
         self.bind(minimum_width=self.setter("width"))
         self.title = title
@@ -209,18 +210,22 @@ class DateTimeField(BoxLayout):
             background_color=CLEAR,
             overlay_color=OVERLAY,
         )
-        body = BoxLayout(orientation="vertical", padding=(20, 10, 20, 20), spacing=12)
+        body = BoxLayout(
+            orientation="vertical",
+            padding=(dp(20), dp(10), dp(20), dp(20)),
+            spacing=dp(12),
+        )
         Paint(body, SURFACE, radius=[24, 24, 0, 0])
 
-        handle_row = BoxLayout(size_hint_y=None, height=4)
+        handle_row = BoxLayout(size_hint_y=None, height=dp(4))
         handle_row.add_widget(Widget())
-        handle = Widget(size_hint=(None, None), size=(40, 4))
+        handle = Widget(size_hint=(None, None), size=(dp(40), dp(4)))
         Paint(handle, BORDER, radius=2)
         handle_row.add_widget(handle)
         handle_row.add_widget(Widget())
         body.add_widget(handle_row)
 
-        header = BoxLayout(orientation="horizontal", size_hint_y=None, height=40)
+        header = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(40))
         header.add_widget(
             wrapped_label(
                 text=f"{self.title} time", font_name=FONT_SEMIBOLD, font_size="18sp"
@@ -239,7 +244,7 @@ class DateTimeField(BoxLayout):
 
         body.add_widget(caption("1. Hour"))
         self._hour_buttons: list[FlatButton] = []
-        hours = GridLayout(cols=6, spacing=6, size_hint_y=None)
+        hours = GridLayout(cols=6, spacing=dp(6), size_hint_y=None)
         hours.bind(minimum_height=hours.setter("height"))
         for value in hour_choices():
             button = self._grid_button(value)
@@ -250,7 +255,7 @@ class DateTimeField(BoxLayout):
 
         body.add_widget(caption("2. Minutes"))
         self._minute_buttons: list[FlatButton] = []
-        minutes = GridLayout(cols=6, spacing=6, size_hint_y=None)
+        minutes = GridLayout(cols=6, spacing=dp(6), size_hint_y=None)
         minutes.bind(minimum_height=minutes.setter("height"))
         for minute in range(0, 60, MINUTE_STEP):
             button = self._grid_button(f":{minute:02d}")
@@ -267,7 +272,7 @@ class DateTimeField(BoxLayout):
             text_color=LINK,
             radius=14,
             size_hint_y=None,
-            height=48,
+            height=dp(48),
         )
         cancel.bind(on_release=lambda *_: self.dismiss_picker())
         body.add_widget(cancel)

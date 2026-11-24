@@ -10,6 +10,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from kivy.clock import Clock
+from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.modalview import ModalView
 from kivy.uix.screenmanager import Screen
@@ -62,7 +63,7 @@ from kivy_calendar.screens.ui import (
 from kivy_calendar.service import CalendarService
 
 QUEUED_NOTICE = "Saved. Google is unreachable, so it will sync automatically."
-SPINNER_WIDTH = 190
+SPINNER_WIDTH = dp(190)
 
 
 def _row_spinner(text: str = "", values: list[str] | None = None) -> FlatSpinner:
@@ -76,7 +77,7 @@ def _row_spinner(text: str = "", values: list[str] | None = None) -> FlatSpinner
         icon="chevron_right",
         halign="right",
         size_hint=(None, None),
-        size=(SPINNER_WIDTH, 44),
+        size=(SPINNER_WIDTH, dp(44)),
     )
 
 
@@ -131,8 +132,8 @@ class AddEventScreen(Screen):
             font_name=FONT_SEMIBOLD,
             font_size="22sp",
             size_hint_y=None,
-            height=48,
-            padding=(0, 8),
+            height=dp(48),
+            padding=(0, dp(8)),
         )
         self.calendar = _row_spinner()
         self.start = DateTimeField(title="Start")
@@ -143,22 +144,22 @@ class AddEventScreen(Screen):
         self.description = plain_input(
             "Optional notes",
             multiline=True,
-            padding=(0, 12),
+            padding=(0, dp(12)),
         )
         self.all_day = ToggleSwitch()
 
         form = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
-            spacing=16,
-            padding=(20, 8, 20, 24),
+            spacing=dp(16),
+            padding=(dp(20), dp(8), dp(20), dp(24)),
         )
         form.bind(minimum_height=form.setter("height"))
 
-        title_field = BoxLayout(orientation="vertical", size_hint_y=None, height=72)
+        title_field = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(72))
         title_field.add_widget(caption("Title"))
         title_field.add_widget(self.summary)
-        underline = Widget(size_hint_y=None, height=2)
+        underline = Widget(size_hint_y=None, height=dp(2))
         Paint(underline, SKY, radius=0)
         title_field.add_widget(underline)
         form.add_widget(title_field)
@@ -166,8 +167,8 @@ class AddEventScreen(Screen):
         when = Card()
         when.add_row("Calendar", _right(self.calendar))
         when.add_row("All day", _right(self.all_day))
-        self._start_field = when.add_row("Starts", _right(self.start), height=56)
-        self._end_field = when.add_row("Ends", _right(self.end), height=56)
+        self._start_field = when.add_row("Starts", _right(self.start), height=dp(56))
+        self._end_field = when.add_row("Ends", _right(self.end), height=dp(56))
         self._start_label = self._start_field.caption
         self._end_label = self._end_field.caption
         form.add_widget(when)
@@ -185,14 +186,16 @@ class AddEventScreen(Screen):
             icon_size=18,
             radius=14,
             size_hint_y=None,
-            height=48,
+            height=dp(48),
         )
         self.suggest_button.bind(on_press=self.suggest_free_time)
         form.add_widget(self.suggest_button)
 
-        notes = BoxLayout(orientation="vertical", size_hint_y=None, height=116)
+        notes = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(116))
         notes.add_widget(caption("Notes"))
-        notes.add_widget(input_box(self.description, height=96, padding=(14, 0)))
+        notes.add_widget(
+            input_box(self.description, height=dp(96), padding=(dp(14), 0))
+        )
         form.add_widget(notes)
 
         self.delete_button = ghost_button(
@@ -201,20 +204,20 @@ class AddEventScreen(Screen):
             icon="trash",
             icon_size=18,
             size_hint_y=None,
-            height=44,
+            height=dp(44),
         )
         self.delete_button.bind(on_press=self.confirm_delete)
         # Holds the delete button only while an existing event is open.
-        self._delete_slot = BoxLayout(size_hint_y=None, height=44)
+        self._delete_slot = BoxLayout(size_hint_y=None, height=dp(44))
         form.add_widget(self._delete_slot)
 
-        scroll_view = ScrollView(bar_width=4)
+        scroll_view = ScrollView(bar_width=dp(4))
         scroll_view.add_widget(form)
 
         self.cancel_button = icon_button("back", fill=CLEAR, border=None)
         self.cancel_button.bind(on_press=self.cancel)
         self.save_button = primary_button(
-            "Save", size_hint=(None, None), size=(84, 40)
+            "Save", size_hint=(None, None), size=(dp(84), dp(40))
         )
         self.save_button.bind(on_press=self.save_event)
         self.title_label = wrapped_label(
@@ -224,30 +227,32 @@ class AddEventScreen(Screen):
         )
         self.title_label.halign = "center"
         save_box = BoxLayout(
-            orientation="vertical", size_hint_x=None, width=84, padding=(0, 2)
+            orientation="vertical", size_hint_x=None, width=dp(84), padding=(0, dp(2))
         )
         save_box.add_widget(self.save_button)
         header = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=44,
-            padding=(12, 0, 16, 0),
-            spacing=8,
+            height=dp(44),
+            padding=(dp(12), 0, dp(16), 0),
+            spacing=dp(8),
         )
         header.add_widget(self.cancel_button)
         header.add_widget(self.title_label)
         # Balance the save button so the title stays centered.
-        header.add_widget(Widget(size_hint_x=None, width=84 - 44))
+        header.add_widget(Widget(size_hint_x=None, width=dp(84) - 44))
         header.add_widget(save_box)
 
         self.status_label = StatusBanner(collapse=True)
-        status_box = BoxLayout(size_hint_y=None, height=0, padding=(20, 0))
+        status_box = BoxLayout(size_hint_y=None, height=0, padding=(dp(20), 0))
         status_box.add_widget(self.status_label)
         self.status_label.bind(
             height=lambda _, height: setattr(status_box, "height", height)
         )
 
-        layout = BoxLayout(orientation="vertical", padding=(0, 20, 0, 0), spacing=8)
+        layout = BoxLayout(
+            orientation="vertical", padding=(0, dp(20), 0, 0), spacing=dp(8)
+        )
         layout.add_widget(header)
         layout.add_widget(status_box)
         layout.add_widget(scroll_view)
@@ -620,13 +625,13 @@ class AddEventScreen(Screen):
         summary = event.summary or "Untitled event"
         popup = ModalView(
             size_hint=(None, None),
-            size=(320, 200),
+            size=(dp(320), dp(200)),
             auto_dismiss=False,
             background="",
             background_color=CLEAR,
             overlay_color=OVERLAY,
         )
-        content = BoxLayout(orientation="vertical", spacing=8, padding=20)
+        content = BoxLayout(orientation="vertical", spacing=dp(8), padding=20)
         Paint(content, SURFACE, radius=20)
         content.add_widget(
             wrapped_label(
@@ -634,7 +639,7 @@ class AddEventScreen(Screen):
                 font_name=FONT_SEMIBOLD,
                 font_size="17sp",
                 size_hint_y=None,
-                height=28,
+                height=dp(28),
             )
         )
         content.add_widget(
@@ -647,8 +652,8 @@ class AddEventScreen(Screen):
         buttons = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=44,
-            spacing=8,
+            height=dp(44),
+            spacing=dp(8),
         )
         keep_button = FlatButton(
             text="Keep", fill=BACKGROUND, text_color=INK, border=DIVIDER
