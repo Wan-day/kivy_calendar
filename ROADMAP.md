@@ -113,6 +113,15 @@ Calendar website needs a test Google account on the device.
 
 Done when: every feature of the desktop app works on Android.
 
+**Shipped in 0.4.0:** Sync requests a manual, expedited sync for each phone
+account with calendars (LOCAL calendars skipped), waits until Android reports
+it finished or 30 s pass, then reloads. After a save or delete the message says
+Android syncs it, and event cards with an unsynced change (`Events.dirty`,
+non-LOCAL calendars) show "Not synced yet". Free time from the phone's events
+already shipped in 0.2.0. The emulator check uses calendars without a real sync
+service, so uploading to Google itself still needs a test Google account on a
+device.
+
 ## 0.5.0: week and month grid views
 
 - A week view and a month view that show events in a grid, like Google

@@ -5,6 +5,18 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-24
+
+- The Sync button on Android asks Android to sync each phone account that has
+  calendars, then reloads the list when the sync is finished (or after 30
+  seconds). Calendars that are only on the phone (LOCAL) are skipped. A failed
+  sync shows a readable error.
+- After saving or deleting on Android, the list says "Saved on the phone.
+  Android syncs it to your account." (or "Deleted on the phone. ...").
+- Event cards whose change has not reached the account yet show a "Not synced
+  yet" tag. Calendars that are only on the phone never show it.
+- Desktop is unchanged.
+
 ## [0.3.0] - 2026-11-24
 
 - Android saves to the phone's calendar: create, edit and delete single
