@@ -80,6 +80,16 @@ from kivy_calendar.service import CalendarService
 CARD_HEIGHT = dp(68)
 SORT_CHIP_WIDTH = dp(170)
 FILTER_PANEL_HEIGHT = dp(34)
+ADD_BUTTON_SIZE = (dp(164), dp(56))
+ADD_BUTTON_MARGIN = dp(24)
+# Grid views end above the floating New event button, plus a small gap.
+GRID_BOTTOM_ROOM = ADD_BUTTON_SIZE[1] + ADD_BUTTON_MARGIN + dp(8)
+# Header sizes: (list view, grid views).
+HEADER_HEIGHT = (dp(60), dp(48))
+SWITCHER_HEIGHT = (dp(40), dp(36))
+SEARCH_HEIGHT = (dp(44), dp(38))
+CONTENT_TOP = (dp(24), dp(10))
+CONTENT_SPACING = (dp(12), dp(6))
 # The views the switcher offers, in order; a view is enabled by register_view.
 VIEW_LABELS = {"list": "List", "week": "Week", "month": "Month"}
 
@@ -317,7 +327,7 @@ class MainScreen(Screen):
         self.sync_button.bind(on_press=lambda *_: self.sync_events())
         self.refresh_button = icon_button("refresh")
         self.refresh_button.bind(on_press=lambda *_: self.load_events())
-        header = BoxLayout(
+        self.header = header = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
             height=dp(60),
@@ -331,7 +341,7 @@ class MainScreen(Screen):
 
         self.name_filter = plain_input("Filter by name", padding=(0, dp(12)))
         self.clear_filters_button = icon_button("close", radius=12, text_color=MUTED)
-        search_row = BoxLayout(
+        self.search_row = search_row = BoxLayout(
             orientation="horizontal", size_hint_y=None, height=dp(44), spacing=dp(8)
         )
         search_icon = BoxLayout(size_hint_x=None, width=dp(18), padding=(0, dp(13)))
@@ -380,7 +390,7 @@ class MainScreen(Screen):
         scroll_view = ScrollView(bar_width=dp(4), bar_color=(*DEEP_SKY[:3], 0.4))
         scroll_view.add_widget(self.event_list)
 
-        content = BoxLayout(
+        self.content = content = BoxLayout(
             orientation="vertical",
             padding=(dp(20), dp(24), dp(20), 0),
             spacing=dp(12),
@@ -438,7 +448,7 @@ class MainScreen(Screen):
             icon="plus",
             font_size="16sp",
             size_hint=(None, None),
-            size=(dp(164), dp(56)),
+            size=ADD_BUTTON_SIZE,
         )
         with self.add_button.canvas.before:
             shadow = BoxShadow(
@@ -466,7 +476,7 @@ class MainScreen(Screen):
             right = root.x + root.width
             self.add_button.pos = (
                 right - self.add_button.width - dp(20),
-                root.y + dp(24),
+                root.y + ADD_BUTTON_MARGIN,
             )
 
         root.bind(pos=place_button, size=place_button)
@@ -507,7 +517,29 @@ class MainScreen(Screen):
                 fill=SKY if chosen else CLEAR, text=INK if chosen else MUTED
             )
         self._show_filter_panel(name in self._views_with_list_filters)
+        self._compact(name != "list")
         self._rebuild_view()
+
+    def _compact(self, grid: bool) -> None:
+        """Tighten the header and leave room for the button in grid views.
+
+        The list view keeps its roomy header and scrolls under the button
+        (its own bottom padding); a grid fills the body, so the body itself
+        ends above the floating button.
+        """
+        pick = 1 if grid else 0
+        self.content.padding = (
+            dp(20),
+            CONTENT_TOP[pick],
+            dp(20),
+            GRID_BOTTOM_ROOM if grid else 0,
+        )
+        self.content.spacing = CONTENT_SPACING[pick]
+        self.header.height = HEADER_HEIGHT[pick]
+        self.view_switcher.height = SWITCHER_HEIGHT[pick]
+        self.search_row.height = SEARCH_HEIGHT[pick]
+        self.status_label.collapse = grid
+        self.status_label._fit()
 
     def show_week_of(self, day: date) -> None:
         """Switch to the week view on the week containing ``day``."""
@@ -737,7 +769,11 @@ class MainScreen(Screen):
             if self._notice:
                 count_text = f"{count_text}. {self._notice}"
         self._notice = ""
-        self._set_status(count_text)
+        # A plain count adds nothing in a grid; the banner then folds away.
+        plain = visible and count_text == f"{len(visible)} event" + (
+            "" if len(visible) == 1 else "s"
+        )
+        self._set_status("" if plain else count_text)
 
     @staticmethod
     def _day_heading(day: date, today: date) -> Label:

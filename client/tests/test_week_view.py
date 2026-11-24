@@ -572,7 +572,7 @@ def test_switching_to_week_swaps_the_body_and_hides_the_list_filters(
     assert main_screen.view_body.children == [main_screen.week_view]
     assert main_screen.filter_panel.parent is None
     assert [b.text for b in main_screen.week_view.blocks] == ["a"]
-    assert main_screen.status_label.text == "1 event"
+    assert main_screen.status_label.text == ""
 
     main_screen.view_buttons["list"].dispatch("on_release")
 
@@ -627,7 +627,7 @@ def test_week_view_uses_the_name_filter_and_reloads(
     main_screen._apply_filters()
 
     assert [b.text for b in main_screen.week_view.blocks] == ["Lunch"]
-    assert main_screen.status_label.text == "1 event"
+    assert main_screen.status_label.text == ""
 
     main_screen.name_filter.text = "zzz"
     main_screen._apply_filters()
