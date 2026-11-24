@@ -7,8 +7,8 @@ from typing import cast
 from fastapi import Request
 
 from cache.repository import EventRepository
+from calendar_provider import CalendarProvider
 from core.config import Settings
-from google_calendar.provider import CalendarProvider
 from retry.queue import RetryQueue
 from slots.service import SlotService
 from sync.service import SyncService

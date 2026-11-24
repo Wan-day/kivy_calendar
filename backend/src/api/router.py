@@ -17,11 +17,11 @@ from api.deps import (
 from api.errors import ApiError, error_status
 from api.schemas import FreeSlot, FreeSlotRequest, FreeSlotsResponse, SyncResponse
 from cache.repository import EventRepository
+from calendar_provider import CalendarProvider
 from core.errors import ErrorCode
 from domain.calendar import CalendarInfo
 from domain.event import Event
 from domain.timezones import TimeZoneOption, list_time_zones
-from google_calendar.provider import CalendarProvider
 from slots.service import SlotService
 from sync.service import SyncService
 

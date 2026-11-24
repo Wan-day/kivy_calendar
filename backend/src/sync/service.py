@@ -14,9 +14,9 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from cache.repository import EventRepository
+from calendar_provider import CalendarProvider, ProviderOperation
 from core.errors import Error, ErrorCode, Result, is_retryable
 from domain.event import Event
-from google_calendar.provider import CalendarProvider, ProviderOperation
 from retry.queue import RetryJob, RetryQueue
 
 CREATE_OPERATION = ProviderOperation.CREATE.value

@@ -22,9 +22,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from calendar_provider import CalendarProvider
 from core.errors import ErrorCode, Result
 from domain.event import Event
-from google_calendar.provider import CalendarProvider
 
 
 class FreeSlot(BaseModel):

@@ -1,6 +1,6 @@
 """The real Google Calendar provider.
 
-This adapter implements the :class:`~google_calendar.provider.CalendarProvider`
+This adapter implements the :class:`~calendar_provider.CalendarProvider`
 contract on top of the Google Calendar v3 API.  It is deliberately the only
 module that knows Google's payload shape: the domain :class:`~domain.event.Event`
 is mapped to ``summary``, ``description``, ``start``/``end``, ``recurrence``,
@@ -99,7 +99,8 @@ _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _CALENDAR_LIST_AUTH_MESSAGE = (
     "Google Calendar calendar list access failed: the OAuth refresh token "
     "does not grant the calendar.calendarlist.readonly scope. Re-run "
-    "`PYTHONPATH=backend/src python -m google_calendar.auth` to grant it, then "
+    "`PYTHONPATH=backend/src:shared/src python -m google_calendar.auth` to "
+    "grant it, then "
     "update GOOGLE_REFRESH_TOKEN."
 )
 
@@ -121,7 +122,7 @@ def generate_event_id() -> str:
 
 
 class GoogleCalendarProvider:
-    """A :class:`~google_calendar.provider.CalendarProvider` backed by Google."""
+    """A :class:`~calendar_provider.CalendarProvider` backed by Google."""
 
     def __init__(
         self,

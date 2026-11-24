@@ -5,10 +5,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from calendar_provider import ProviderOperation
 from core.errors import ErrorCode, Result
 from domain.event import Event
 from google_calendar.fake import FakeCalendarProvider
-from google_calendar.provider import ProviderOperation
 from slots.service import FreeSlot, SlotService
 
 BERLIN = ZoneInfo("Europe/Berlin")

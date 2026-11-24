@@ -8,10 +8,12 @@ RUN useradd --system --no-create-home --uid 10001 app \
     && mkdir -p /data \
     && chown app:app /data
 
+COPY shared/pyproject.toml ./shared/pyproject.toml
+COPY shared/src ./shared/src
 COPY backend/pyproject.toml ./backend/pyproject.toml
 COPY backend/src ./backend/src
 
-RUN pip install --no-cache-dir ./backend
+RUN pip install --no-cache-dir ./shared ./backend
 
 VOLUME ["/data"]
 

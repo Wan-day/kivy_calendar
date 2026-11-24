@@ -30,6 +30,8 @@ where = ["src"]
 [tool.ruff]
 line-length = 88
 target-version = "py314"
+# Shared calendar logic lives in ../shared/src; treat it as first-party.
+src = ["src", "../shared/src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
