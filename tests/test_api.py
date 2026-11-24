@@ -8,6 +8,7 @@ import pytest
 from api.app import _build_default_provider, create_app
 from api.unavailable_provider import UnavailableCalendarProvider
 from cache.repository import EventRepository
+from calendar_provider import ProviderOperation
 from core.config import Settings
 from core.errors import ErrorCode, Result
 from core.sqlite import Database
@@ -16,7 +17,6 @@ from domain.event import Event
 from fastapi.testclient import TestClient
 from google_calendar.auth import CALENDAR_SCOPES
 from google_calendar.fake import FakeCalendarProvider
-from google_calendar.provider import ProviderOperation
 from httpx import Response
 from retry.queue import RetryQueue
 from slots.service import SlotService

@@ -4,10 +4,10 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from calendar_provider import CalendarProvider, ProviderOperation
 from core.errors import ErrorCode, Result
 from domain.event import Event
 from google_calendar.fake import FakeCalendarProvider
-from google_calendar.provider import CalendarProvider, ProviderOperation
 
 BERLIN = ZoneInfo("Europe/Berlin")
 

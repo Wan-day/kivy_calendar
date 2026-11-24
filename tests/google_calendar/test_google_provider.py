@@ -13,6 +13,7 @@ from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import pytest
+from calendar_provider import CalendarProvider
 from core.errors import ErrorCode, Result, is_retryable
 from domain.event import Event
 from google.auth.exceptions import RefreshError
@@ -21,7 +22,6 @@ from google_calendar.google_provider import (
     GoogleCalendarProvider,
     generate_event_id,
 )
-from google_calendar.provider import CalendarProvider
 from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
 BERLIN = ZoneInfo("Europe/Berlin")

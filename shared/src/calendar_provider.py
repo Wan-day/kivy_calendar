@@ -1,6 +1,7 @@
-"""The calendar provider contract.
+"""The calendar provider contract shared by the desktop and Android builds.
 
-Google Calendar is the source of truth.  The sync service talks to it only
+The calendar behind a provider is the source of truth: Google Calendar for the
+backend, the phone's calendar store for Android.  Services talk to it only
 through this interface, so every event the app accepts is written to the
 calendar before it is shown as saved or cached locally.  Implementations return
 expected failures (offline, rate limits, upstream errors) as ``Result`` values;

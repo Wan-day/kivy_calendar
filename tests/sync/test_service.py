@@ -6,11 +6,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from cache.repository import EventRepository
+from calendar_provider import ProviderOperation
 from core.errors import ErrorCode, Result
 from core.sqlite import Database
 from domain.event import Event
 from google_calendar.fake import FakeCalendarProvider
-from google_calendar.provider import ProviderOperation
 from retry.queue import RetryJob, RetryQueue, RetryStatus
 from sync.service import (
     CREATE_OPERATION,

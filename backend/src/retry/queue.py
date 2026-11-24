@@ -22,9 +22,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from calendar_provider import ProviderOperation
 from core.errors import ErrorCode, Result
 from core.sqlite import Database, run_in_transaction
-from google_calendar.provider import ProviderOperation
 
 SUPERSEDED_MARKER = "superseded by a newer write"
 

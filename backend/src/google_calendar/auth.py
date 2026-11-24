@@ -13,7 +13,7 @@ Getting a refresh token
 The OAuth client must be a *Desktop app* client in Google Cloud.  With its id
 and secret exported, run the local browser flow from the repository root::
 
-    PYTHONPATH=backend/src python -m google_calendar.auth
+    PYTHONPATH=backend/src:shared/src python -m google_calendar.auth
 
 The helper starts a temporary server on localhost, opens the consent page, and
 prints the refresh token.  Copy the printed value into ``GOOGLE_REFRESH_TOKEN``

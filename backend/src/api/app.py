@@ -19,10 +19,10 @@ from api.errors import ApiError, api_error_handler
 from api.router import api_router
 from api.unavailable_provider import UnavailableCalendarProvider
 from cache.repository import EventRepository
+from calendar_provider import CalendarProvider
 from core.config import Settings, get_settings
 from google_calendar.auth import CALENDAR_SCOPES, build_credentials
 from google_calendar.google_provider import GoogleCalendarProvider
-from google_calendar.provider import CalendarProvider
 from retry.queue import RetryQueue
 from slots.service import SlotService
 from sync.service import SyncService

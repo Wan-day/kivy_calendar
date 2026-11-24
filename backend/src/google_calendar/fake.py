@@ -14,14 +14,14 @@ from collections import deque
 from collections.abc import Iterable
 from datetime import datetime
 
+from calendar_provider import ProviderOperation
 from core.errors import Error, ErrorCode, Result
 from domain.calendar import CalendarInfo
 from domain.event import Event
-from google_calendar.provider import ProviderOperation
 
 
 class FakeCalendarProvider:
-    """An in-memory :class:`~google_calendar.provider.CalendarProvider` fake."""
+    """An in-memory :class:`~calendar_provider.CalendarProvider` fake."""
 
     def __init__(
         self,
