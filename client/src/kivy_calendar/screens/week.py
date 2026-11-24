@@ -324,6 +324,7 @@ class WeekView(BoxLayout):
         )
         self.scroll.add_widget(self.grid)
         self.scroll.bind(size=self._apply_pending_scroll)
+        self.scroll.bind(on_scroll_start=self._stop_pending_scroll)
         self.add_widget(nav)
         self.add_widget(self.day_header)
         self.add_widget(self.all_day_strip)
@@ -378,10 +379,13 @@ class WeekView(BoxLayout):
         self.scroll.scroll_y = max(0.0, 1 - hour * HOUR_HEIGHT / spare)
 
     def _apply_pending_scroll(self, *_: Any) -> None:
-        """Open at 07:00 once the view knows its real size."""
+        """Keep 07:00 at the top while the view settles to its real size."""
         if self._scroll_pending and self.scroll.height > dp(100):
-            self._scroll_pending = False
             self.scroll_to_hour()
+
+    def _stop_pending_scroll(self, *_: Any) -> None:
+        """Stop re-applying the opening position once the user scrolls."""
+        self._scroll_pending = False
 
     def _on_empty_tap(self, day: date, minute: int) -> None:
         """Turn a tapped slot into an aware start time."""
