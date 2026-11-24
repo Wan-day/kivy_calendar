@@ -292,12 +292,9 @@ def _main(
     from kivy_calendar.screens.main import MainScreen
 
     starts: list[datetime] = []
-    # The new-event handler belongs to another change; stub it here.
+    # Record tapped slots instead of opening the form.
     monkeypatch.setattr(
-        MainScreen,
-        "open_add_event_at",
-        lambda self, start: starts.append(start),
-        raising=False,
+        MainScreen, "open_add_event_at", lambda self, start: starts.append(start)
     )
     client = FakeClient(list(events))
     manager = ScreenManager()

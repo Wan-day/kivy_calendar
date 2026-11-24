@@ -414,7 +414,7 @@ class MainScreen(Screen):
         self.view_body = BoxLayout(orientation="vertical")
         self.view_body.add_widget(scroll_view)
         self.week_view = WeekView(
-            self.open_event, self._new_event_at, colour_for=self._colour_for
+            self.open_event, self.open_add_event_at, colour_for=self._colour_for
         )
         self.register_view("week", self.week_view)
 
@@ -513,12 +513,6 @@ class MainScreen(Screen):
     def _colour_for(self, calendar_id: str) -> Any:
         """Return the colour of a calendar for the grid views."""
         return self._calendar_dots.get(calendar_id, CALENDAR_DOTS[0])
-
-    def _new_event_at(self, start: datetime) -> None:
-        """Open the form for a new event starting at a tapped time slot."""
-        # ``open_add_event_at`` is added next to the form's prefill.
-        host: Any = self
-        host.open_add_event_at(start)
 
     @property
     def rows(self) -> list[EventRow]:
