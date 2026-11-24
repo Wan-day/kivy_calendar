@@ -421,7 +421,7 @@ class ThemedOption(SpinnerOption):
         self.color = INK
         self.font_name = FONT
         self.font_size = "14sp"
-        self.height = 44
+        self.height = dp(44)
 
 
 class FlatSpinner(StyledMixin, Spinner):
@@ -518,6 +518,12 @@ class ToggleSwitch(Widget):
             Color(*SURFACE)
             self._knob = RoundedRectangle(radius=[11])
         self.bind(pos=self._draw, size=self._draw, active=self._draw)
+        # Fade while disabled, like the theme's buttons.
+        self.bind(
+            disabled=lambda _, disabled: setattr(
+                self, "opacity", 0.45 if disabled else 1.0
+            )
+        )
         self._draw()
 
     def _draw(self, *_: Any) -> None:
