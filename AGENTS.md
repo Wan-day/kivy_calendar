@@ -48,7 +48,7 @@ Android build:
 - Writes go to the phone's calendar store and count as saved once it accepts them; Android uploads them later.
 - Android assigns event IDs. Store the app's own ID in `UID_2445` so a repeated save finds the event instead of duplicating it.
 - Extended properties are not available (only sync adapters may write them); do not depend on them.
-- Request only `READ_CALENDAR` and `WRITE_CALENDAR`; no internet permission.
+- Request only `READ_CALENDAR`, `WRITE_CALENDAR` and `READ_SYNC_STATS` (lets Sync wait for Android's account sync; granted at install); no internet permission.
 - Calendar access runs off the UI thread.
 
 ## Versioning
