@@ -4,7 +4,7 @@ A calendar app to track things easier
 
 ## Status
 
-Version **0.0.2** (see `VERSION`). Changes per version are in
+Version **0.0.3** (see `VERSION`). Changes per version are in
 [CHANGELOG.md](CHANGELOG.md); the plan up to the 1.0.0 Android release is in
 [ROADMAP.md](ROADMAP.md).
 
@@ -287,6 +287,7 @@ python -m pip install ./shared ./backend pytest httpx mypy ruff
 pytest
 ruff check .
 mypy shared/src backend/src tests
+(cd client && mypy src)
 ```
 
 Client tests need a display. CI runs them under a virtual X server:

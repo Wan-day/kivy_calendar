@@ -293,24 +293,19 @@ def test_update_targets_the_event_calendar_when_set(
     assert _event_result(result).calendar_id == "work@example.com"
 
 
-def test_create_event_targets_a_series_override_when_set(
+def test_create_event_rejects_an_occurrence_of_a_series(
     provider: GoogleCalendarProvider,
     service: Mock,
 ) -> None:
-    """An event that names a series saves the occurrence slot instead."""
+    """Google would insert a standalone event, so the create is refused."""
     event = _event()
     event.recurring_event_id = "series-1"
-    insert = service.events.return_value.insert
-    insert.return_value.execute.return_value = _resource(recurringEventId="series-1")
 
     result = provider.create_event(event)
 
-    assert result.is_ok
-    insert.assert_called_once()
-    call = insert.call_args.kwargs
-    assert call["calendarId"] == "primary"
-    assert call["body"]["recurringEventId"] == "series-1"
-    assert "id" not in call["body"]
+    assert result.error is not None
+    assert result.error.code is ErrorCode.INVALID_ARGUMENT
+    service.events.return_value.insert.assert_not_called()
 
 
 def test_update_event_patches_the_real_occurrence_instance(

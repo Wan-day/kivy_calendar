@@ -38,12 +38,13 @@ major bump to 1.0.0 marks the moment the Android build is usable.
 Patch releases can ship between any of the versions below. Known candidates:
 
 - ~~Show the app version in the app~~ (done in 0.0.2).
-- A create queued while offline on an empty list still shows "No events yet".
-- `create_event` with a `recurring_event_id` inserts a new event instead of
-  editing the occurrence.
-- Event validation edge case when the default start falls in a skipped
-  daylight-saving hour.
-- Fix the 25 existing client mypy errors and add client type-checking to CI.
+- ~~A create queued while offline on an empty list still shows "No events yet"~~ (done in 0.0.3).
+- ~~`create_event` with a `recurring_event_id` inserts a new event instead of
+  editing the occurrence~~ (done in 0.0.3: rejected; occurrences are updated).
+- ~~Event validation edge case when the default start falls in a skipped
+  daylight-saving hour~~ (done in 0.0.3).
+- ~~Fix the existing client mypy errors and add client type-checking to CI~~
+  (done in 0.0.3; client tests are not type-checked yet).
 
 ## 0.1.0: calendar service interface and Android build spike
 

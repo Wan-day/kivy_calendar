@@ -56,6 +56,54 @@ def test_default_event_times_crosses_midnight() -> None:
     assert end - start == timedelta(hours=1)
 
 
+def _assert_valid_window(start: datetime, end: datetime, now: datetime) -> None:
+    """Both wall-clock texts must exist in Berlin and keep their order."""
+    for value in (start, end):
+        text = to_wall_clock_value(value, "Europe/Berlin")
+        localize_wall_clock(text, "Europe/Berlin")
+    start_local = localize_wall_clock(
+        to_wall_clock_value(start, "Europe/Berlin"), "Europe/Berlin"
+    )
+    end_local = localize_wall_clock(
+        to_wall_clock_value(end, "Europe/Berlin"), "Europe/Berlin"
+    )
+    assert start_local > now
+    assert end_local > start_local
+
+
+def test_default_event_times_skips_the_spring_forward_gap() -> None:
+    """01:30 before the 02:00 -> 03:00 jump starts at 03:00, not at 02:00."""
+    now = datetime(2026, 3, 29, 1, 30, tzinfo=BERLIN)
+
+    start, end = default_event_times(now)
+
+    assert (start.hour, start.day) == (3, 29)
+    assert end - start == timedelta(hours=1)
+    _assert_valid_window(start, end, now)
+
+
+def test_default_event_times_before_the_fall_back_hour() -> None:
+    """01:30 before the repeated 02:00 hour gives a usable, ordered window."""
+    now = datetime(2026, 10, 25, 1, 30, tzinfo=BERLIN)
+
+    start, end = default_event_times(now)
+
+    assert start == datetime(2026, 10, 25, 2, 0, tzinfo=BERLIN)
+    assert end > start
+    _assert_valid_window(start, end, now)
+
+
+def test_default_event_times_inside_the_fall_back_hour() -> None:
+    """Both occurrences of 02:30 give a start after now and an ordered end."""
+    for fold in (0, 1):
+        now = datetime(2026, 10, 25, 2, 30, fold=fold, tzinfo=BERLIN)
+
+        start, end = default_event_times(now)
+
+        assert start > now
+        _assert_valid_window(start, end, now)
+
+
 def test_format_event_when_uses_a_single_time_span_within_one_day() -> None:
     """Same-day events show the date once."""
     event = _event(

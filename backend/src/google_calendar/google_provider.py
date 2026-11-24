@@ -170,21 +170,16 @@ class GoogleCalendarProvider:
         return Result.ok(cls(service, calendar_id, time_zone=time_zone))
 
     def create_event(self, event: Event) -> Result[Event]:
-        """Insert ``event`` with its client-generated id, or as a series override.
+        """Insert ``event`` with its client-generated id.
 
-        An event that carries a ``recurring_event_id`` targets one occurrence
-        slot of a recurring series, so the Google insert creates or replaces that
-        override instead of creating a standalone event.
+        An event that carries a ``recurring_event_id`` is one occurrence of a
+        series.  Google ignores ``recurringEventId`` on insert and would create
+        a standalone event, so it is rejected; edit occurrences with
+        ``update_event``.
         """
         calendar_id = self._resolve(event.calendar_id or self._calendar_id)
         if event.recurring_event_id:
-            return self._event_request(
-                lambda: self._service.events().insert(
-                    calendarId=calendar_id,
-                    body=_event_to_payload(event),
-                ),
-                calendar_id,
-            )
+            return Result.fail(ErrorCode.INVALID_ARGUMENT, _OCCURRENCE_CREATE_MESSAGE)
         invalid = _event_id_error(event.id)
         if invalid is not None:
             return Result.fail(invalid.code, invalid.message)
@@ -559,6 +554,11 @@ def _event_id_error(event_id: str) -> Error | None:
         "Google Calendar event ids must be 5-1024 characters from the "
         f"base32hex alphabet [0-9a-v]; got {event_id!r}",
     )
+
+
+_OCCURRENCE_CREATE_MESSAGE = (
+    "an occurrence of a recurring series cannot be created; update it instead"
+)
 
 
 def _event_to_payload(event: Event) -> dict[str, Any]:

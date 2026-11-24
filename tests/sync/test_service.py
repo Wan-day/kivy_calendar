@@ -1153,3 +1153,20 @@ def test_failed_move_leaves_the_cache_on_the_old_calendar(
     cached = _cached(repository, event.id)
     assert cached is not None
     assert cached.calendar_id == "primary"
+
+
+def test_create_event_rejects_an_occurrence_without_calling_google(
+    service: SyncService,
+    provider: FakeCalendarProvider,
+    retry_queue: RetryQueue,
+) -> None:
+    """An occurrence is edited, never created: no insert, no queued retry."""
+    event = _event("series1_20261106T080000Z")
+    event.recurring_event_id = "series1"
+
+    result = service.create_event(event)
+
+    assert result.error is not None
+    assert result.error.code is ErrorCode.INVALID_ARGUMENT
+    assert provider.calls == []
+    assert _jobs(retry_queue.list_due(now=NOW + timedelta(days=1))) == []

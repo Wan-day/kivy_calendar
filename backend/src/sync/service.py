@@ -27,6 +27,9 @@ DEFAULT_RETRY_BATCH_SIZE = 10
 DEFAULT_RETRY_LEASE = timedelta(minutes=5)
 
 _EVENT_PAYLOAD_KEY = "event"
+_OCCURRENCE_CREATE_MESSAGE = (
+    "an occurrence of a recurring series cannot be created; update it instead"
+)
 _EVENT_ID_PAYLOAD_KEY = "event_id"
 _CALENDAR_ID_PAYLOAD_KEY = "calendar_id"
 _PREVIOUS_CALENDAR_ID_PAYLOAD_KEY = "previous_calendar_id"
@@ -60,7 +63,13 @@ class SyncService:
         A transient provider failure queues the event payload for retry and
         returns a ``QUEUED`` error; the event is not cached until Google
         confirms it.
+
+        An event that carries a ``recurring_event_id`` is rejected with
+        ``INVALID_ARGUMENT``: it names an occurrence of an existing series, and
+        occurrences are edited with an update, never created.
         """
+        if event.recurring_event_id:
+            return Result.fail(ErrorCode.INVALID_ARGUMENT, _OCCURRENCE_CREATE_MESSAGE)
         result = self._provider.create_event(event)
         if result.error is not None:
             return self._queue_failed_write(

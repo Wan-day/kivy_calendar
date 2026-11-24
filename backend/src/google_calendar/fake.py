@@ -79,6 +79,12 @@ class FakeCalendarProvider:
         failure = self._take_failure(ProviderOperation.CREATE)
         if failure is not None:
             return Result.fail(failure.code, failure.message)
+        if event.recurring_event_id:
+            return Result.fail(
+                ErrorCode.INVALID_ARGUMENT,
+                "an occurrence of a recurring series cannot be created; "
+                "update it instead",
+            )
         if event.id in self._events:
             return Result.fail(
                 ErrorCode.ALREADY_EXISTS,
