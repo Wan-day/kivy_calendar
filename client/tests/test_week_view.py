@@ -261,3 +261,174 @@ def test_opens_scrolled_to_seven_in_the_morning() -> None:
 
     spare = view.grid.height - view.scroll.height
     assert (1 - view.scroll.scroll_y) * spare == pytest.approx(7 * HOUR_HEIGHT)
+
+
+class FakeClient:
+    """Backend double that returns the events it is given."""
+
+    def __init__(self, events: list[CalendarEvent]) -> None:
+        self.events = events
+
+    def list_events(self) -> list[CalendarEvent]:
+        """Return the configured events."""
+        return list(self.events)
+
+    def list_calendars(self) -> list[Any]:
+        """Return no calendars."""
+        return []
+
+    def list_time_zones(self) -> list[Any]:
+        """Return no time zones."""
+        return []
+
+
+def _main(
+    monkeypatch: pytest.MonkeyPatch, *events: CalendarEvent
+) -> tuple[Any, Any, list[datetime]]:
+    """Return the manager and main screen on the test week, with events."""
+    from kivy.uix.screenmanager import ScreenManager
+
+    from kivy_calendar.screens.add_event import AddEventScreen
+    from kivy_calendar.screens.main import MainScreen
+
+    starts: list[datetime] = []
+    # The new-event handler belongs to another change; stub it here.
+    monkeypatch.setattr(
+        MainScreen,
+        "open_add_event_at",
+        lambda self, start: starts.append(start),
+        raising=False,
+    )
+    client = FakeClient(list(events))
+    manager = ScreenManager()
+    main_screen = MainScreen(name="main", client=client)
+    manager.add_widget(main_screen)
+    manager.add_widget(
+        AddEventScreen(name="add_event", client=client, refresh=lambda: None)
+    )
+    main_screen.week_view.tz = BERLIN
+    main_screen.week_view._now = lambda: NOW
+    main_screen.week_view.go_today()
+    main_screen._show_events(list(events))
+    return manager, main_screen, starts
+
+
+def test_list_is_the_default_view_and_month_is_not_available_yet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The switcher starts on List; Week works; Month stays disabled."""
+    _, main_screen, _ = _main(monkeypatch, _event("a", 11, 9, 10))
+
+    assert main_screen.current_view == "list"
+    buttons = main_screen.view_buttons
+    assert [b.text for b in buttons.values()] == ["List", "Week", "Month"]
+    assert not buttons["list"].disabled
+    assert not buttons["week"].disabled
+    assert buttons["month"].disabled
+    assert len(main_screen.rows) == 1
+
+    main_screen.show_view("month")
+    assert main_screen.current_view == "list"
+
+
+def test_switching_to_week_swaps_the_body_and_hides_the_list_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Week replaces the list and drops the date chips and sort spinner."""
+    _, main_screen, _ = _main(monkeypatch, _event("a", 11, 9, 10))
+    assert main_screen.filter_panel.parent is not None
+
+    main_screen.view_buttons["week"].dispatch("on_release")
+
+    assert main_screen.current_view == "week"
+    assert main_screen.view_body.children == [main_screen.week_view]
+    assert main_screen.filter_panel.parent is None
+    assert [b.text for b in main_screen.week_view.blocks] == ["a"]
+    assert main_screen.status_label.text == "1 event"
+
+    main_screen.view_buttons["list"].dispatch("on_release")
+
+    assert main_screen.current_view == "list"
+    assert main_screen.filter_panel.parent is not None
+    assert len(main_screen.rows) == 1
+
+
+def test_week_blocks_open_the_event_form(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tapping a block opens the form for that event."""
+    event = _event("a", 11, 9, 10)
+    manager, main_screen, _ = _main(monkeypatch, event)
+    main_screen.show_view("week")
+    opened: list[Any] = []
+    form = manager.get_screen("add_event")
+    monkeypatch.setattr(form, "open_for", opened.append)
+
+    main_screen.week_view.blocks[0].dispatch("on_release")
+
+    assert opened == [event]
+    assert manager.current == "add_event"
+
+
+def test_tapping_empty_week_space_calls_open_add_event_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The main screen hands tapped slots to ``open_add_event_at``."""
+    _, main_screen, starts = _main(monkeypatch)
+    main_screen.show_view("week")
+    grid = main_screen.week_view.grid
+    x = grid.x + GUTTER + 4.5 * grid.column_width
+    y = grid.top - (10 * 60 + 29) * grid.height / 1440
+
+    grid.tap(x, y)
+
+    assert starts == [datetime(2026, 11, 13, 10, 0, tzinfo=BERLIN)]
+
+
+def test_week_view_uses_the_name_filter_and_reloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The name filter narrows the week; a reload redraws it."""
+    standup = _event("Standup", 11, 9, 10)
+    lunch = _event("Lunch", 11, 12, 13)
+    _, main_screen, _ = _main(monkeypatch, standup, lunch)
+    main_screen.show_view("week")
+    assert len(main_screen.week_view.blocks) == 2
+
+    main_screen.name_filter.text = "lunch"
+    main_screen._apply_filters()
+
+    assert [b.text for b in main_screen.week_view.blocks] == ["Lunch"]
+    assert main_screen.status_label.text == "1 event"
+
+    main_screen.name_filter.text = "zzz"
+    main_screen._apply_filters()
+
+    assert main_screen.week_view.blocks == []
+    assert main_screen.status_label.text == "No events match the filters."
+
+    main_screen.name_filter.text = ""
+    main_screen._show_events([_event("New", 10, 8, 9)])
+    assert [b.text for b in main_screen.week_view.blocks] == ["New"]
+
+
+def test_week_blocks_use_the_calendar_colour(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A block takes the dot colour of its calendar."""
+    from kivy_calendar.api import CalendarSummary
+
+    _, main_screen, _ = _main(monkeypatch)
+    main_screen._show_events(
+        [_event("a", 11, 9, 10)],
+        [
+            CalendarSummary(id="primary", summary="Primary", primary=True),
+            CalendarSummary(id="work@example.com", summary="Work"),
+        ],
+    )
+    main_screen.show_view("week")
+
+    (block,) = main_screen.week_view.blocks
+    assert tuple(block.paint.border_color.rgba) == tuple(
+        main_screen._calendar_dots["work@example.com"]
+    )

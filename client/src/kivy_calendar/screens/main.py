@@ -49,6 +49,7 @@ from kivy_calendar.screens.date_picker import DatePicker
 from kivy_calendar.screens.theme import (
     BORDER,
     CALENDAR_DOTS,
+    CLEAR,
     CORAL_DEEP_TEXT,
     CORAL_TINT,
     DEEP_SKY,
@@ -59,7 +60,9 @@ from kivy_calendar.screens.theme import (
     INK,
     MUTED,
     NOW_TINT,
+    SKY,
     SKY_SOFT,
+    SKY_TINT,
     SURFACE,
     FlatButton,
     FlatSpinner,
@@ -70,10 +73,14 @@ from kivy_calendar.screens.theme import (
     primary_button,
 )
 from kivy_calendar.screens.ui import StatusBanner, input_box, plain_input
+from kivy_calendar.screens.week import WeekView
 from kivy_calendar.service import CalendarService
 
 CARD_HEIGHT = dp(68)
 SORT_CHIP_WIDTH = dp(170)
+FILTER_PANEL_HEIGHT = dp(34)
+# The views the switcher offers, in order; a view is enabled by register_view.
+VIEW_LABELS = {"list": "List", "week": "Week", "month": "Month"}
 
 
 def _text(text: str, **kwargs: Any) -> Label:
@@ -343,7 +350,10 @@ class MainScreen(Screen):
         )
         self.sort_spinner.color = MUTED
         self.filter_panel = BoxLayout(
-            orientation="horizontal", size_hint_y=None, height=dp(34), spacing=dp(8)
+            orientation="horizontal",
+            size_hint_y=None,
+            height=FILTER_PANEL_HEIGHT,
+            spacing=dp(8),
         )
         self.filter_panel.add_widget(self.date_from_filter)
         self.filter_panel.add_widget(self.date_to_filter)
@@ -374,11 +384,46 @@ class MainScreen(Screen):
             padding=(dp(20), dp(24), dp(20), 0),
             spacing=dp(12),
         )
+        # Views other than the list: name -> widget with ``set_events``.  The
+        # list keeps its own rendering; every other view gets the events that
+        # pass the name filter (see ``_rebuild_calendar_view``).
+        self.views: dict[str, Widget] = {"list": scroll_view}
+        self.current_view = "list"
+        self._views_with_list_filters = {"list"}
+        self.view_buttons: dict[str, FlatButton] = {}
+        self.view_switcher = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(40),
+            padding=dp(3),
+            spacing=dp(2),
+        )
+        Paint(self.view_switcher, SKY_TINT, radius=None)
+        for name, label in VIEW_LABELS.items():
+            button = FlatButton(
+                text=label,
+                fill=SKY if name == self.current_view else CLEAR,
+                text_color=INK if name == self.current_view else MUTED,
+                radius=None,
+                font_size="14sp",
+                disabled=name != self.current_view,
+            )
+            button.bind(on_release=lambda _, view=name: self.show_view(view))
+            self.view_buttons[name] = button
+            self.view_switcher.add_widget(button)
+        self.view_body = BoxLayout(orientation="vertical")
+        self.view_body.add_widget(scroll_view)
+        self.week_view = WeekView(
+            self.open_event, self._new_event_at, colour_for=self._colour_for
+        )
+        self.register_view("week", self.week_view)
+
         content.add_widget(header)
+        content.add_widget(self.view_switcher)
         content.add_widget(self.status_label)
         content.add_widget(search_row)
         content.add_widget(self.filter_panel)
-        content.add_widget(scroll_view)
+        content.add_widget(self.view_body)
 
         self.add_button = primary_button(
             "New event",
@@ -427,6 +472,53 @@ class MainScreen(Screen):
             )
         else:
             self._set_status("Events have not been loaded yet.")
+
+    def register_view(
+        self, name: str, widget: Widget, *, list_filters: bool = False
+    ) -> None:
+        """Make the view ``name`` (a key of ``VIEW_LABELS``) selectable.
+
+        ``widget`` needs ``set_events(events)``.  The From/To chips and the
+        sort spinner only show with the view when ``list_filters`` is true.
+        """
+        self.views[name] = widget
+        if list_filters:
+            self._views_with_list_filters.add(name)
+        self.view_buttons[name].disabled = False
+
+    def show_view(self, name: str) -> None:
+        """Switch to the registered view ``name``; unknown names are ignored."""
+        if name not in self.views:
+            return
+        self.current_view = name
+        self.view_body.clear_widgets()
+        self.view_body.add_widget(self.views[name])
+        for view, button in self.view_buttons.items():
+            chosen = view == name
+            button.set_colors(
+                fill=SKY if chosen else CLEAR, text=INK if chosen else MUTED
+            )
+        self._show_filter_panel(name in self._views_with_list_filters)
+        self._rebuild_view()
+
+    def _show_filter_panel(self, visible: bool) -> None:
+        """Show or hide the From/To chips and the sort spinner."""
+        shown = self.filter_panel.parent is not None
+        if visible and not shown:
+            # Just above the view body, which is the last child added.
+            self.view_body.parent.add_widget(self.filter_panel, index=1)
+        elif shown and not visible:
+            self.view_body.parent.remove_widget(self.filter_panel)
+
+    def _colour_for(self, calendar_id: str) -> Any:
+        """Return the colour of a calendar for the grid views."""
+        return self._calendar_dots.get(calendar_id, CALENDAR_DOTS[0])
+
+    def _new_event_at(self, start: datetime) -> None:
+        """Open the form for a new event starting at a tapped time slot."""
+        # ``open_add_event_at`` is added next to the form's prefill.
+        host: Any = self
+        host.open_add_event_at(start)
 
     @property
     def rows(self) -> list[EventRow]:
@@ -547,6 +639,9 @@ class MainScreen(Screen):
 
     def _rebuild_view(self) -> None:
         """Filter, sort and render the events matching the current inputs."""
+        if self.current_view != "list":
+            self._rebuild_calendar_view()
+            return
         date_from: date | None = None
         date_to: date | None = None
         date_from_text = self.date_from_filter.value.strip()
@@ -617,6 +712,25 @@ class MainScreen(Screen):
                     now=now,
                 )
             )
+
+    def _rebuild_calendar_view(self) -> None:
+        """Give the shown grid view the events that pass the name filter."""
+        visible = filter_events(self.events, name=self.name_filter.text)
+        view: Any = self.views[self.current_view]
+        view.set_events(visible)
+        if not visible:
+            empty_text = (
+                "No events match the filters."
+                if self.name_filter.text.strip()
+                else "No events yet. Tap New event to create one."
+            )
+            count_text = self._notice or empty_text
+        else:
+            count_text = f"{len(visible)} event" + ("" if len(visible) == 1 else "s")
+            if self._notice:
+                count_text = f"{count_text}. {self._notice}"
+        self._notice = ""
+        self._set_status(count_text)
 
     @staticmethod
     def _day_heading(day: date, today: date) -> Label:
