@@ -287,6 +287,7 @@ python -m pip install ./shared ./backend pytest httpx mypy ruff
 pytest
 ruff check .
 mypy shared/src backend/src tests
+(cd client && mypy src)
 ```
 
 Client tests need a display. CI runs them under a virtual X server:
