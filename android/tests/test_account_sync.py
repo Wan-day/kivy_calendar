@@ -9,7 +9,7 @@ from fakes import FakeAccountSync, FakeCalendarStore, FakePermissions, calendar_
 
 from kivy_calendar.models import ServiceError
 from phone_calendar.provider import AndroidCalendarProvider
-from phone_calendar.service import PhoneCalendarService
+from phone_calendar.service import PhoneCalendarService, _short_error
 from phone_calendar.store import Row
 
 NOW = datetime(2026, 11, 24, 8, 0, tzinfo=UTC)
@@ -90,17 +90,45 @@ def test_no_accounts_means_no_request() -> None:
 
 def test_jni_failure_becomes_service_error() -> None:
     sync = FakeAccountSync(error=RuntimeError("JavaException: boom"))
-    with pytest.raises(ServiceError, match="sync failed.*boom"):
+    with pytest.raises(ServiceError, match="could not start a sync: .*boom"):
         _service([calendar_row(1, "Main")], sync, Clock()).sync()
 
 
-def test_busy_failure_becomes_service_error() -> None:
+def test_busy_failure_stops_waiting_but_still_reloads() -> None:
     class Broken(FakeAccountSync):
         def busy(self, accounts: list[tuple[str, str]]) -> bool:
+            self.polls += 1
             raise RuntimeError("nope")
 
-    with pytest.raises(ServiceError):
-        _service([calendar_row(1, "Main")], Broken(), Clock()).sync()
+    sync = Broken()
+    clock = Clock()
+    assert _service([calendar_row(1, "Main")], sync, clock).sync() == 0
+    assert sync.polls == 1
+    assert clock.sleeps == [1]
+
+
+def test_jvm_error_becomes_one_short_line() -> None:
+    trace = (
+        "asking: JVM exception occurred: java.lang.SecurityException: no "
+        "permission\n\tat android.os.Parcel.read(Parcel.java:1)\n\tat x"
+    )
+    sync = FakeAccountSync(error=RuntimeError(trace.split("asking: ", 1)[1]))
+    with pytest.raises(ServiceError) as caught:
+        _service([calendar_row(1, "Main")], sync, Clock()).sync()
+    assert caught.value.message == (
+        "Android could not start a sync: SecurityException: no permission"
+    )
+    assert caught.value.code == "upstream_error"
+
+
+def test_tabs_and_spaces_are_collapsed() -> None:
+    assert _short_error(RuntimeError("a\t\tb   c")) == "a b c"
+
+
+def test_long_error_is_capped() -> None:
+    short = _short_error(RuntimeError("x" * 500))
+    assert len(short) == 160
+    assert short.endswith("…")
 
 
 def test_waits_one_poll_before_the_first_busy_check() -> None:

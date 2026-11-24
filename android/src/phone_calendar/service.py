@@ -7,6 +7,8 @@ client's access gate, so the app can ask for calendar permission first.
 
 from __future__ import annotations
 
+import logging
+import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -31,6 +33,11 @@ from phone_calendar.provider import (
     AndroidCalendarProvider,
 )
 from slots.service import SlotService
+
+logger = logging.getLogger(__name__)
+
+_MAX_ERROR_LENGTH = 160
+_JVM_PREFIX = "JVM exception occurred: "
 
 
 class PhoneCalendarService:
@@ -167,9 +174,21 @@ class PhoneCalendarService:
         return len(self.list_events())
 
     def _sync_accounts(self, accounts: list[tuple[str, str]]) -> None:
-        """Request a sync and wait for it, turning JNI failures into errors."""
+        """Request a sync and wait for it.
+
+        A failed request is an error. A failed "still busy?" check only stops
+        the wait, because the request already went out and the list is
+        re-read anyway.
+        """
         try:
             self._account_sync.request(accounts)
+        except Exception as error:  # noqa: BLE001 - JNI raises JavaException
+            logger.exception("requesting an Android sync failed")
+            raise ServiceError(
+                "upstream_error",
+                f"Android could not start a sync: {_short_error(error)}",
+            ) from error
+        try:
             deadline = self._clock() + self._sync_timeout
             # Android may not report a just-requested sync as pending yet, so
             # give it one poll before the first "still busy?" check.
@@ -177,9 +196,11 @@ class PhoneCalendarService:
             while self._account_sync.busy(accounts) and self._clock() < deadline:
                 self._sleep(self._sync_poll)
         except Exception as error:  # noqa: BLE001 - JNI raises JavaException
-            raise ServiceError(
-                "upstream_error", f"asking Android to sync failed: {error}"
-            ) from error
+            logger.warning(
+                "checking the Android sync state failed (%s); not waiting",
+                _short_error(error),
+                exc_info=True,
+            )
 
     def find_free_slots(
         self,
@@ -198,6 +219,18 @@ class PhoneCalendarService:
             )
         )
         return [FreeSlot(start=slot.start, end=slot.end) for slot in slots]
+
+
+def _short_error(error: BaseException) -> str:
+    """One short line for an exception, without JVM prefixes or stack trace."""
+    text = str(error).strip()
+    line = text.splitlines()[0] if text else ""
+    line = line.replace(_JVM_PREFIX, "", 1)
+    line = re.sub(r"\bjava\.lang\.", "", line, count=1)
+    line = " ".join(line.split()) or type(error).__name__
+    if len(line) > _MAX_ERROR_LENGTH:
+        line = line[: _MAX_ERROR_LENGTH - 1].rstrip() + "…"
+    return line
 
 
 def _check[T](result: Result[T]) -> None:
