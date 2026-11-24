@@ -9,9 +9,9 @@ phone's calendar on Android. Implementations raise
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from kivy_calendar.models import (
     CalendarEvent,
@@ -67,6 +67,27 @@ class CalendarService(Protocol):
         ...
 
 
+@runtime_checkable
+class AccessGate(Protocol):
+    """A service that needs the user's permission before it can read events.
+
+    The Android phone-calendar service implements it; the app shows the
+    permission screen while :meth:`has_access` is false.
+    """
+
+    def has_access(self) -> bool:
+        """Whether the service may read the calendar now."""
+        ...
+
+    def request_access(self, on_result: Callable[[bool], None]) -> None:
+        """Ask for access; ``on_result`` may run on another thread."""
+        ...
+
+    def open_settings(self) -> None:
+        """Open the system settings where access can be granted."""
+        ...
+
+
 SERVICE_ENV = "KIVY_CALENDAR_SERVICE"
 MEMORY_SERVICE = "memory"
 
@@ -77,10 +98,11 @@ def choose_service(
 ) -> tuple[CalendarService | None, str | None]:
     """Return the service for this build and a configuration error, if any.
 
-    Android uses the in-memory service until the phone-calendar service
-    exists; ``KIVY_CALENDAR_SERVICE=memory`` does the same on desktop. Other
-    desktop runs use the HTTP backend. Without a backend token the app still
-    starts, so the window can say what is missing instead of crashing.
+    ``KIVY_CALENDAR_SERVICE=memory`` uses in-memory sample events anywhere.
+    Otherwise Android reads the phone's own calendar (``phone_calendar``, part
+    of the Android build) and desktop uses the HTTP backend. Without a backend
+    token the app still starts, so the window can say what is missing instead
+    of crashing.
     """
     # Imported here so the interface module stays free of implementations.
     from kivy_calendar.api import (
@@ -92,8 +114,15 @@ def choose_service(
     from kivy_calendar.memory_service import InMemoryCalendarService, sample_events
 
     environment = os.environ if environ is None else environ
-    if platform == "android" or environment.get(SERVICE_ENV) == MEMORY_SERVICE:
+    if environment.get(SERVICE_ENV) == MEMORY_SERVICE:
         return InMemoryCalendarService(sample_events()), None
+    if platform == "android":
+        try:
+            from phone_calendar import create_service  # Android build only
+
+            return create_service(), None
+        except Exception as error:  # noqa: BLE001 - shown instead of crashing
+            return None, f"The phone calendar is not available: {error}"
     try:
         client = BackendClient(
             base_url=environment.get(BASE_URL_ENV) or DEFAULT_BASE_URL,

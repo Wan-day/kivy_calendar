@@ -1283,3 +1283,57 @@ def test_screens_work_against_the_in_memory_service(
     assert manager.current == "main"
     assert [row.event.summary for row in main_screen.rows] == ["Dentist"]
     assert main_screen.rows[0].event.calendar_id == "personal"
+
+
+class _FakeGate:
+    """An access gate whose permission dialog answers ``answer``."""
+
+    def __init__(self, answer: bool) -> None:
+        self.answer = answer
+        self.settings_opened = 0
+
+    def has_access(self) -> bool:
+        return False
+
+    def request_access(self, on_result: Callable[[bool], None]) -> None:
+        on_result(self.answer)
+
+    def open_settings(self) -> None:
+        self.settings_opened += 1
+
+
+def test_permission_screen_continues_once_access_is_granted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Allowing access runs on_granted; no settings button is needed."""
+    from kivy_calendar.screens.permission import PermissionScreen
+
+    _run_inline(monkeypatch)
+    granted: list[bool] = []
+    screen = PermissionScreen(_FakeGate(True), lambda: granted.append(True))
+
+    screen.request_access()
+
+    assert granted == [True]
+    assert screen.settings_button.parent is None
+
+
+def test_permission_screen_offers_settings_after_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refusal explains what to do and shows Open app settings."""
+    from kivy_calendar.screens.permission import DENIED_TEXT, PermissionScreen
+
+    _run_inline(monkeypatch)
+    gate = _FakeGate(False)
+    granted: list[bool] = []
+    screen = PermissionScreen(gate, lambda: granted.append(True))
+
+    screen.request_access()
+    screen.settings_button.dispatch("on_release")
+
+    assert granted == []
+    assert screen.body_label.text == DENIED_TEXT
+    assert screen.settings_button.parent is not None
+    assert gate.settings_opened == 1
+    assert not screen.allow_button.disabled
