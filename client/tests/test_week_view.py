@@ -17,10 +17,17 @@ os.environ.setdefault("KIVY_NO_ARGS", "1")
 
 pytest.importorskip("kivy")
 
+from kivy.input.motionevent import MotionEvent  # noqa: E402
 from kivy.metrics import dp  # noqa: E402
 
 from kivy_calendar.api import CalendarEvent  # noqa: E402
-from kivy_calendar.screens.week import GUTTER, HOUR_HEIGHT, WeekView  # noqa: E402
+from kivy_calendar.screens.week import (  # noqa: E402
+    GUTTER,
+    HOUR_HEIGHT,
+    TOP_INSET,
+    FollowEffect,
+    WeekView,
+)
 
 BERLIN = ZoneInfo("Europe/Berlin")
 # Wednesday 11 Nov 2026, noon: the "now" of these tests.
@@ -120,7 +127,7 @@ def test_events_show_as_blocks_on_their_day_and_time() -> None:
     assert block.x > view.grid.x + GUTTER + 2 * column
     assert block.x < view.grid.x + GUTTER + 3 * column
     assert block.height == pytest.approx(HOUR_HEIGHT - dp(2))
-    assert block.top == pytest.approx(view.grid.top - 9 * HOUR_HEIGHT - 1)
+    assert block.top == pytest.approx(view.grid.y_of(9 * 60) - 1)
     assert block.text == "standup"
 
 
@@ -166,7 +173,7 @@ def test_tapping_empty_space_asks_for_a_new_event_rounded_to_30_minutes() -> Non
     grid = view.grid
     column = grid.column_width
     x = grid.x + GUTTER + 3.5 * column
-    y = grid.top - (14 * 60 + 50) * grid.height / 1440
+    y = grid.y_of(14 * 60 + 50)
 
     assert grid.tap(x, y)
 
@@ -179,7 +186,7 @@ def test_tapping_the_hour_labels_does_nothing() -> None:
     view, recorder = _week()
     grid = view.grid
 
-    assert not grid.tap(grid.x + GUTTER / 2, grid.top - 5 * HOUR_HEIGHT)
+    assert not grid.tap(grid.x + GUTTER / 2, grid.y_of(5 * 60))
     assert recorder.new_starts == []
 
 
@@ -190,7 +197,7 @@ def test_touch_on_empty_space_is_a_tap_but_a_drag_is_not() -> None:
     view, recorder = _week()
     grid = view.grid
     x = grid.x + GUTTER + 0.5 * grid.column_width
-    y = grid.top - 8 * HOUR_HEIGHT - 5
+    y = grid.y_of(8 * 60) - 5
 
     def touch(py: float) -> Any:
         return SimpleNamespace(pos=(x, py), x=x, y=py)
@@ -217,7 +224,7 @@ def test_today_is_highlighted_and_marked_with_a_time_line() -> None:
     assert painted == [date(2026, 11, 11)]
     points = view.grid._now_line.points
     assert len(points) == 4
-    assert points[1] == pytest.approx(view.grid.top - 12 * HOUR_HEIGHT)
+    assert points[1] == pytest.approx(view.grid.y_of(12 * 60))
 
     view.next_button.dispatch("on_release")
     assert view.grid._now_line.points == []
@@ -244,13 +251,237 @@ def test_events_outside_the_week_do_not_show() -> None:
     assert [b.text for b in view.blocks] == ["later"]
 
 
-def test_long_titles_are_cut_to_the_block() -> None:
-    """The title is truncated inside the block instead of overflowing."""
+def test_titles_wrap_in_the_block_and_clip_without_an_ellipsis() -> None:
+    """The title box is the block's inner size; nothing is shortened."""
     view, _ = _week(_event("long", 11, 9, 10, summary="A very long event title " * 5))
 
     (block,) = view.blocks
-    assert block.shorten
-    assert block.text_size[0] <= block.width
+    assert not block.shorten
+    assert block.halign == "left"
+    assert block.valign == "top"
+    assert 0 < block.text_size[0] < block.width
+    assert 0 < block.text_size[1] < block.height
+    assert block.font_size <= dp(11)
+
+
+def test_scroll_view_does_not_bounce_and_hides_its_bar() -> None:
+    """No overscroll effect, no bar over the Sunday column, no dead zone."""
+    view, _ = _week()
+
+    assert type(view.scroll.effect_y) is FollowEffect
+    assert view.scroll.bar_width == 0
+    assert view.scroll.effect_y.drag_threshold == 0
+    assert view.scroll.scroll_timeout >= 150
+
+
+def test_scroll_is_clamped_and_reset_when_the_week_changes() -> None:
+    """A wild scroll value is pulled back; changing weeks returns to 07:00."""
+    view, _ = _week()
+
+    view.scroll.scroll_y = 7.5
+    assert view.scroll.scroll_y == 1
+    view.scroll.scroll_y = -3
+    assert view.scroll.scroll_y == 0
+
+    spare = view.grid.height - view.scroll.height
+    for change in (
+        lambda: view.shift_week(1),
+        lambda: view.shift_week(-1),
+        view.go_today,
+        lambda: view.show_week(date(2026, 12, 1)),
+    ):
+        view.scroll.scroll_y = 0
+        change()
+        assert (1 - view.scroll.scroll_y) * spare == pytest.approx(7 * HOUR_HEIGHT)
+
+
+def test_nav_row_items_share_height_and_centre() -> None:
+    """Today is as tall as the arrows and all sit on the row's middle."""
+    view, _ = _week()
+
+    buttons = (view.previous_button, view.next_button, view.today_button)
+    assert len({b.height for b in buttons}) == 1
+    assert all(b.pos_hint == {"center_y": 0.5} for b in buttons)
+
+
+def test_first_hour_label_is_not_clipped_at_the_grid_top() -> None:
+    """The 00:00 label has room above the first hour line."""
+    view, _ = _week()
+    grid = view.grid
+
+    first = grid.hour_labels[0]
+    assert first.text == "00:00"
+    assert first.top <= grid.top
+    assert grid.y_of(0) == pytest.approx(grid.top - TOP_INSET)
+
+
+WINDOW = 10_000.0
+
+
+class _Touch(MotionEvent):
+    """A real Kivy touch placed at window point (x, y), so grab() works."""
+
+    def depack(self, args: Any) -> None:
+        """Take the position from ``args``, scaled like a window touch."""
+        self.is_touch = True
+        self.profile = ["pos"]
+        self.sx, self.sy = args["x"] / WINDOW, args["y"] / WINDOW
+        super().depack(args)
+
+
+def _touch(x: float, y: float, grab: Any = None) -> Any:
+    """Return a real touch at a window point."""
+    touch = _Touch("test", 1, {"x": x, "y": y})
+    touch.scale_for_screen(WINDOW, WINDOW)
+    touch.grab_current = grab
+    return touch
+
+
+def _move(touch: Any, x: float, y: float) -> None:
+    """Move ``touch`` to a window point."""
+    touch.sx, touch.sy = x / WINDOW, y / WINDOW
+    touch.scale_for_screen(WINDOW, WINDOW)
+
+
+def _quick_tap(view: WeekView, x: float, y: float, *, replay: bool = False) -> None:
+    """Send down and up at once, as Kivy does to the grid.
+
+    With ``replay`` it mimics ScrollView: the up reaches the grid with no
+    grabber, then again with the pressed child as ``grab_current``, and that
+    child (which grabbed the touch) gets its own release in the grab pass.
+    """
+    grid = view.grid
+    touch = _touch(x, y)
+    grid.on_touch_down(touch)
+    if not replay:
+        grid.on_touch_up(touch)
+        return
+    block = next((b for b in view.blocks if b.collide_point(x, y)), None)
+    if block is not None:
+        touch.grab_current = block
+        block.on_touch_down(touch)
+        touch.grab_current = None
+    grid.on_touch_up(touch)
+    if block is not None:
+        touch.grab_current = block
+        grid.on_touch_up(touch)
+        touch.grab_current = None
+
+
+@pytest.mark.parametrize("replay", [False, True])
+def test_quick_tap_on_a_block_opens_only_the_event(replay: bool) -> None:
+    """A tap on a block never also asks for a new event."""
+    event = _event("standup", 11, 9, 10)
+    view, recorder = _week(event)
+    x, y = _centre(view, view.blocks[0])
+
+    _quick_tap(view, x, y, replay=replay)
+
+    assert recorder.new_starts == []
+    assert recorder.opened == ([event] if replay else [])
+
+
+def _settle(view: WeekView, scroll_y: float) -> None:
+    """Scroll to ``scroll_y`` and let Kivy lay the viewport out."""
+    from kivy.clock import Clock
+
+    Clock.tick()
+    view.scroll.scroll_y = scroll_y
+    Clock.tick()
+
+
+def _through_scroll_view(view: WeekView, x: float, y: float) -> None:
+    """Quick-tap the window point (x, y) via the real ScrollView.
+
+    ScrollView holds the touch, replays it to the grid on release and ends it
+    0.2 s later with the grabbing child as ``grab_current``.
+    """
+    import time
+
+    from kivy.clock import Clock
+
+    touch = _touch(x, y)
+    scroll = view.scroll
+    scroll.on_touch_down(touch)
+    scroll.on_touch_up(touch)
+    time.sleep(0.25)
+    Clock.tick()
+    Clock.tick()
+
+
+def test_quick_tap_on_a_block_through_the_real_scroll_view() -> None:
+    """Through ScrollView's delayed replay the event opens once, no new one."""
+    event = _event("standup", 11, 9, 10)
+    view, recorder = _week(event)
+    _settle(view, 0.5)
+    centres = [b.to_window(*b.center) for b in view.blocks]
+    x, y = next(c for c in centres if view.scroll.collide_point(*c))
+
+    _through_scroll_view(view, x, y)
+
+    assert recorder.new_starts == []
+    assert recorder.opened == [event]
+
+
+def test_quick_tap_on_empty_space_through_the_real_scroll_view() -> None:
+    """The same path on empty space creates exactly one event."""
+    view, recorder = _week(_event("standup", 11, 9, 10))
+    _settle(view, 0.5)
+    grid = view.grid
+    x = view.scroll.x + GUTTER + 6.5 * grid.column_width
+
+    _through_scroll_view(view, x, view.scroll.center_y)
+
+    assert recorder.opened == []
+    assert len(recorder.new_starts) == 1
+
+
+@pytest.mark.parametrize("replay", [False, True])
+def test_quick_tap_on_empty_space_asks_for_a_new_event_only(replay: bool) -> None:
+    """A tap away from every block creates, and never opens."""
+    view, recorder = _week(_event("standup", 11, 9, 10))
+    grid = view.grid
+    x = grid.x + GUTTER + 0.5 * grid.column_width
+    y = grid.y_of(15 * 60) - 5
+
+    _quick_tap(view, x, y, replay=replay)
+
+    assert recorder.opened == []
+    assert recorder.new_starts == [datetime(2026, 11, 9, 15, 0, tzinfo=BERLIN)]
+    # A later replay with another grabber must not add a second one.
+    other = _touch(x, y, grab=object())
+    view.grid.on_touch_up(other)
+    assert len(recorder.new_starts) == 1
+
+
+def test_a_drag_that_starts_on_a_block_does_nothing() -> None:
+    """Scrolling by dragging over a block neither opens nor creates."""
+    view, recorder = _week(_event("standup", 11, 9, 10))
+    grid = view.grid
+    x, y = _centre(view, view.blocks[0])
+    touch = _touch(x, y)
+
+    grid.on_touch_down(touch)
+    _move(touch, x, y - dp(60))
+    grid.on_touch_up(touch)
+
+    assert recorder.opened == []
+    assert recorder.new_starts == []
+
+
+def test_a_tap_ending_on_a_block_after_starting_in_the_clear_is_no_new_event() -> None:
+    """Even a tiny slide onto a block does not create at that slot."""
+    view, recorder = _week(_event("standup", 11, 9, 10))
+    grid = view.grid
+    block = view.blocks[0]
+    x = block.x + block.width / 2
+    start = _touch(x, block.top + 2)
+
+    grid.on_touch_down(start)
+    _move(start, x, block.top - 2)
+    grid.on_touch_up(start)
+
+    assert recorder.new_starts == []
 
 
 def test_opens_scrolled_to_seven_in_the_morning() -> None:
@@ -375,7 +606,7 @@ def test_tapping_empty_week_space_calls_open_add_event_at(
     main_screen.show_view("week")
     grid = main_screen.week_view.grid
     x = grid.x + GUTTER + 4.5 * grid.column_width
-    y = grid.top - (10 * 60 + 29) * grid.height / 1440
+    y = grid.y_of(10 * 60 + 29)
 
     grid.tap(x, y)
 

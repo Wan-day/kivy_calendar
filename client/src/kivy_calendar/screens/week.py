@@ -6,8 +6,10 @@ from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta, tzinfo
 from typing import Any
 
+from kivy.effects.scroll import ScrollEffect
 from kivy.graphics import Color, Line
 from kivy.metrics import dp
+from kivy.properties import NumericProperty
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
@@ -49,7 +51,12 @@ FIRST_VISIBLE_HOUR = 7
 ALL_DAY_ROW = dp(20)
 TAP_SLOP = dp(10)
 SNAP_MINUTES = 30
-GRID_HEIGHT = 24 * HOUR_HEIGHT
+# Room above the 00:00 line, so the first hour label is not cut off.
+TOP_INSET = dp(8)
+GRID_HEIGHT = 24 * HOUR_HEIGHT + TOP_INSET
+# Padding between a block's outline and its title.
+TEXT_PAD = dp(3)
+NAV_HEIGHT = dp(44)
 
 ColourFor = Callable[[str], RGBA]
 
@@ -63,6 +70,12 @@ def _tint(colour: RGBA, weight: float = 0.22) -> RGBA:
         1 - weight * (1 - blue),
         1.0,
     )
+
+
+class FollowEffect(ScrollEffect):
+    """Scroll without bounce, and follow the finger from the first pixel."""
+
+    drag_threshold = NumericProperty(0)
 
 
 class EventBlock(ButtonBehavior, Label):
@@ -102,6 +115,35 @@ class EventBlock(ButtonBehavior, Label):
         self.max_lines = max(1, int(height // line))
 
 
+class TitleBlock(EventBlock):
+    """An event box whose title wraps and is clipped, never given an ellipsis.
+
+    Shows as many characters as fit, like Google Calendar: the title starts at
+    the top left, wraps onto more lines when the box is tall enough and is cut
+    off when space runs out.
+    """
+
+    def __init__(
+        self,
+        event: CalendarEvent,
+        colour: RGBA,
+        *,
+        font_size: str = "10sp",
+        **kwargs: Any,
+    ) -> None:
+        """Create the block for ``event`` in ``colour``."""
+        super().__init__(event, colour, font_size=font_size, **kwargs)
+        self.shorten = False
+        self.max_lines = 0
+
+    def _fit_text(self, *_: Any) -> None:
+        """Make the title's box the block's inner size, so it wraps and clips."""
+        self.text_size = (
+            max(self.width - 2 * TEXT_PAD, 1),
+            max(self.height - 2 * TEXT_PAD, 1),
+        )
+
+
 class TimeGrid(FloatLayout):
     """Hour lines, hour labels, event blocks and the current-time line.
 
@@ -124,9 +166,10 @@ class TimeGrid(FloatLayout):
         self.layout: WeekLayout | None = None
         self.today: date | None = None
         self.now_minute = 0
-        self.blocks: list[tuple[EventBlock, PlacedEvent]] = []
+        self.blocks: list[tuple[TitleBlock, PlacedEvent]] = []
         self.hour_labels: list[Label] = []
         self._tap_start: tuple[float, float] | None = None
+        self._tap_on_block = False
 
         with self.canvas.before:
             Color(*DIVIDER)
@@ -138,12 +181,12 @@ class TimeGrid(FloatLayout):
             self._now_line = Line(width=dp(1.5))
         for hour in range(24):
             label = Label(
-                text=f"{hour:02d}:00" if hour else "",
+                text=f"{hour:02d}:00",
                 font_name=FONT,
                 font_size="10sp",
                 color=MUTED,
                 halign="right",
-                valign="top",
+                valign="middle",
                 size_hint=(None, None),
             )
             label.bind(size=lambda lbl, size: setattr(lbl, "text_size", size))
@@ -166,7 +209,7 @@ class TimeGrid(FloatLayout):
         self.now_minute = now_minute
         for day in layout.days:
             for placed in layout.timed[day]:
-                block = EventBlock(
+                block = TitleBlock(
                     placed.event, self.colour_for(placed.event.calendar_id)
                 )
                 block.bind(on_release=lambda b: self.open_event(b.event))
@@ -176,23 +219,28 @@ class TimeGrid(FloatLayout):
 
     def y_of(self, minute: float) -> float:
         """Return the window y of ``minute`` minutes after midnight."""
-        return self.top - minute * self.height / DAY_MINUTES
+        return self.top - TOP_INSET - minute * self._day_height / DAY_MINUTES
+
+    @property
+    def _day_height(self) -> float:
+        """Return the height of the 24 hours, without the top inset."""
+        return max(self.height - TOP_INSET, 0)
 
     def _place(self, *_: Any) -> None:
         """Position every line, label and block from the current size."""
-        scale = self.height / 24
+        scale = self._day_height / 24
         column = self.column_width
         left = self.x + GUTTER
         right = self.x + self.width
         for hour, line in enumerate(self._hour_lines):
-            y = self.top - hour * scale
+            y = self.top - TOP_INSET - hour * scale
             line.points = [left, y, right, y]
         for index, line in enumerate(self._day_lines):
             x = left + index * column
             line.points = [x, self.y, x, self.top]
         for hour, label in enumerate(self.hour_labels):
             label.size = (GUTTER - dp(6), dp(14))
-            label.pos = (self.x, self.top - hour * scale - dp(14) / 2 - dp(2))
+            label.pos = (self.x, self.top - TOP_INSET - hour * scale - dp(7))
         for block, placed in self.blocks:
             lane_width = column / placed.lanes
             block.pos = (
@@ -232,7 +280,8 @@ class TimeGrid(FloatLayout):
         if x - self.x < GUTTER or not 0 <= index < 7:
             return None
         minute = round_down(
-            int((self.top - y) * DAY_MINUTES / self.height), SNAP_MINUTES
+            int((self.top - TOP_INSET - y) * DAY_MINUTES / (self._day_height or 1)),
+            SNAP_MINUTES,
         )
         return self.layout.days[index], min(max(minute, 0), DAY_MINUTES - SNAP_MINUTES)
 
@@ -244,19 +293,34 @@ class TimeGrid(FloatLayout):
         self.on_empty_tap(*slot)
         return True
 
+    def _block_at(self, x: float, y: float) -> bool:
+        """Return whether a window point is on an event block."""
+        return any(block.collide_point(x, y) for block, _ in self.blocks)
+
     def on_touch_down(self, touch: Any) -> bool:
-        """Remember where a touch started so a drag is not taken as a tap."""
-        self._tap_start = touch.pos if self.collide_point(*touch.pos) else None
+        """Remember where a touch started and whether it began on a block."""
+        inside = self.collide_point(*touch.pos)
+        self._tap_start = touch.pos if inside else None
+        self._tap_on_block = inside and self._block_at(*touch.pos)
         return super().on_touch_down(touch)
 
     def on_touch_up(self, touch: Any) -> bool:
-        """Treat a short touch on empty space as a tap on that time slot."""
-        if super().on_touch_up(touch):
-            return True
+        """Treat a short touch on empty space as a tap on that time slot.
+
+        A touch that began on a block, or that is being replayed to a grabbing
+        widget, is never an empty-slot tap: the block's own release handles it.
+        """
+        handled = super().on_touch_up(touch)
+        grabber = getattr(touch, "grab_current", None)
+        if grabber is not None and grabber is not self:
+            return handled
         start, self._tap_start = self._tap_start, None
-        if start is None:
-            return False
+        on_block, self._tap_on_block = self._tap_on_block, False
+        if handled or start is None or on_block:
+            return handled
         if abs(touch.x - start[0]) > TAP_SLOP or abs(touch.y - start[1]) > TAP_SLOP:
+            return False
+        if self._block_at(*touch.pos):
             return False
         return self.tap(*touch.pos)
 
@@ -305,8 +369,14 @@ class WeekView(BoxLayout):
         )
         self.title_label.bind(size=lambda lbl, size: setattr(lbl, "text_size", size))
         nav = BoxLayout(
-            orientation="horizontal", size_hint_y=None, height=dp(44), spacing=dp(4)
+            orientation="horizontal",
+            size_hint_y=None,
+            height=NAV_HEIGHT,
+            spacing=dp(4),
         )
+        for button in (self.previous_button, self.next_button, self.today_button):
+            button.height = NAV_HEIGHT
+            button.pos_hint = {"center_y": 0.5}
         nav.add_widget(self.previous_button)
         nav.add_widget(self.title_label)
         nav.add_widget(self.next_button)
@@ -319,12 +389,16 @@ class WeekView(BoxLayout):
         self.grid = TimeGrid(self.open_event, self._on_empty_tap, self.colour_for)
         self.scroll = ScrollView(
             do_scroll_x=False,
-            bar_width=dp(4),
-            bar_color=(*DEEP_SKY[:3], 0.4),
+            bar_width=0,
+            effect_cls=FollowEffect,
+            scroll_distance=dp(6),
+            scroll_timeout=250,
         )
         self.scroll.add_widget(self.grid)
         self.scroll.bind(size=self._apply_pending_scroll)
         self.scroll.bind(on_scroll_start=self._stop_pending_scroll)
+        self.scroll.bind(scroll_y=self._clamp_scroll)
+        self.bind(parent=self._on_parent)
         self.add_widget(nav)
         self.add_widget(self.day_header)
         self.add_widget(self.all_day_strip)
@@ -338,18 +412,18 @@ class WeekView(BoxLayout):
         return self._now().astimezone(self.tz).date()
 
     @property
-    def blocks(self) -> list[EventBlock]:
+    def blocks(self) -> list[TitleBlock]:
         """Return the timed event blocks, day by day."""
         return [block for block, _ in self.grid.blocks]
 
     @property
-    def all_day_blocks(self) -> list[EventBlock]:
+    def all_day_blocks(self) -> list[TitleBlock]:
         """Return the all-day chips, left to right."""
         return [
             chip
             for column in reversed(self.all_day_strip.children)
             for chip in reversed(column.children)
-            if isinstance(chip, EventBlock)
+            if isinstance(chip, TitleBlock)
         ]
 
     def set_events(self, events: Sequence[CalendarEvent]) -> None:
@@ -361,6 +435,7 @@ class WeekView(BoxLayout):
         """Show the week containing ``day``."""
         self.anchor = day
         self._render()
+        self._reset_scroll()
 
     def shift_week(self, weeks: int) -> None:
         """Move ``weeks`` weeks forward, or back when negative."""
@@ -376,7 +451,24 @@ class WeekView(BoxLayout):
         if spare <= 0:
             self.scroll.scroll_y = 1
             return
-        self.scroll.scroll_y = max(0.0, 1 - hour * HOUR_HEIGHT / spare)
+        self.scroll.scroll_y = min(1.0, max(0.0, 1 - hour * HOUR_HEIGHT / spare))
+
+    def _reset_scroll(self) -> None:
+        """Go back to 07:00, also after the size settles."""
+        self._scroll_pending = True
+        if self.scroll.effect_y is not None:
+            self.scroll.effect_y.cancel()
+        self.scroll_to_hour()
+
+    def _on_parent(self, _view: Any, parent: Any) -> None:
+        """Start at 07:00 whenever the view is put on screen."""
+        if parent is not None:
+            self._reset_scroll()
+
+    def _clamp_scroll(self, _scroll: Any, value: float) -> None:
+        """Keep ``scroll_y`` inside [0, 1], whatever an effect did."""
+        if not 0.0 <= value <= 1.0:
+            self.scroll.scroll_y = min(1.0, max(0.0, value if value == value else 1))
 
     def _apply_pending_scroll(self, *_: Any) -> None:
         """Keep 07:00 at the top while the view settles to its real size."""
@@ -443,7 +535,7 @@ class WeekView(BoxLayout):
         for day in layout.days:
             column = BoxLayout(orientation="vertical", spacing=dp(2), padding=dp(1))
             for event in layout.all_day[day]:
-                chip = EventBlock(
+                chip = TitleBlock(
                     event, self.colour_for(event.calendar_id), font_size="10sp"
                 )
                 chip.size_hint = (1, None)
