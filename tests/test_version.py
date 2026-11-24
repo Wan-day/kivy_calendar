@@ -24,3 +24,10 @@ def test_every_package_uses_the_app_version() -> None:
             f"{package}/pyproject.toml has {data['project']['version']}, "
             f"VERSION has {version}"
         )
+
+
+def test_client_reports_the_app_version() -> None:
+    init = (ROOT / "client" / "src" / "kivy_calendar" / "__init__.py").read_text()
+    match = re.search(r'^__version__ = "([^"]+)"$', init, re.MULTILINE)
+    assert match is not None, "kivy_calendar/__init__.py has no __version__"
+    assert match.group(1) == _version()

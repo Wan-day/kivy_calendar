@@ -5,6 +5,10 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-11-24
+
+- The main screen shows the app version next to the "Calendar" title.
+
 ## [0.0.1] - 2026-11-24
 
 First tracked version: the self-hosted desktop app as merged in #30.

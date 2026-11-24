@@ -1230,3 +1230,12 @@ def test_date_filter_chips_show_the_chosen_dates() -> None:
 
     main_screen._clear_filters()
     assert main_screen.date_from_filter.text == "From date"
+
+
+def test_main_screen_shows_the_app_version() -> None:
+    """The version from kivy_calendar.__version__ sits next to the title."""
+    from kivy_calendar import __version__
+
+    _, main_screen, _ = _make_screens(FakeClient())
+
+    assert main_screen.version_label.text == f"v{__version__}"
