@@ -288,6 +288,20 @@ def test_create_event_writes_to_google_then_caches(
     assert provider.calls == [(ProviderOperation.CREATE, "event-1")]
 
 
+def test_create_event_rejects_an_occurrence_of_a_series(
+    client: TestClient,
+    provider: FakeCalendarProvider,
+) -> None:
+    """A create naming a series is a 400; occurrences are edited with PATCH."""
+    payload = _event_payload("series1_20261106T080000Z")
+    payload["recurring_event_id"] = "series1"
+
+    response = client.post("/events", json=payload, headers=_auth_headers())
+
+    assert response.status_code == 400
+    assert provider.calls == []
+
+
 def test_create_event_returns_403_for_permission_errors(
     client: TestClient,
     provider: FakeCalendarProvider,
