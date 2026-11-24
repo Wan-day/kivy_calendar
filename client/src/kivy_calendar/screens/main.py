@@ -46,6 +46,7 @@ from kivy_calendar.models import (
     ServiceError,
 )
 from kivy_calendar.screens.date_picker import DatePicker
+from kivy_calendar.screens.month import MonthView
 from kivy_calendar.screens.theme import (
     BORDER,
     CALENDAR_DOTS,
@@ -417,6 +418,13 @@ class MainScreen(Screen):
             self.open_event, self.open_add_event_at, colour_for=self._colour_for
         )
         self.register_view("week", self.week_view)
+        self.month_view = MonthView(
+            self.open_event,
+            self.open_add_event_at,
+            self.show_week_of,
+            colour_for=self._colour_for,
+        )
+        self.register_view("month", self.month_view)
 
         content.add_widget(header)
         content.add_widget(self.view_switcher)
@@ -500,6 +508,11 @@ class MainScreen(Screen):
             )
         self._show_filter_panel(name in self._views_with_list_filters)
         self._rebuild_view()
+
+    def show_week_of(self, day: date) -> None:
+        """Switch to the week view on the week containing ``day``."""
+        self.week_view.show_week(day)
+        self.show_view("week")
 
     def _show_filter_panel(self, visible: bool) -> None:
         """Show or hide the From/To chips and the sort spinner."""

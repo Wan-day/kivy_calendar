@@ -310,10 +310,10 @@ def _main(
     return manager, main_screen, starts
 
 
-def test_list_is_the_default_view_and_month_is_not_available_yet(
+def test_list_is_the_default_view_and_week_and_month_are_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The switcher starts on List; Week works; Month stays disabled."""
+    """The switcher starts on List; Week and Month are enabled."""
     _, main_screen, _ = _main(monkeypatch, _event("a", 11, 9, 10))
 
     assert main_screen.current_view == "list"
@@ -321,10 +321,10 @@ def test_list_is_the_default_view_and_month_is_not_available_yet(
     assert [b.text for b in buttons.values()] == ["List", "Week", "Month"]
     assert not buttons["list"].disabled
     assert not buttons["week"].disabled
-    assert buttons["month"].disabled
+    assert not buttons["month"].disabled
     assert len(main_screen.rows) == 1
 
-    main_screen.show_view("month")
+    main_screen.show_view("nonsense")
     assert main_screen.current_view == "list"
 
 
