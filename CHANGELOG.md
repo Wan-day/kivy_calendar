@@ -5,6 +5,20 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-24
+
+- The screens talk to a `CalendarService` interface. The HTTP `BackendClient`
+  is the desktop implementation; `InMemoryCalendarService` keeps events in
+  memory with sample data and needs no backend. Desktop can use it with
+  `KIVY_CALENDAR_SERVICE=memory`; without a backend token the error now says
+  so.
+- Android build (`android/`): `buildozer.spec`, `build.sh` and an entry point.
+  A debug APK for x86_64 builds with python-for-android 2026.5.9 (Python
+  3.14.2, Kivy 2.3.1, pydantic 2.12.3) and runs on the emulator with sample
+  events; the shared calendar models import on the device.
+- Known issue: on phones, layout sizes are not scaled by screen density, so
+  text overflows its boxes (fix planned for 0.1.1).
+
 ## [0.0.3] - 2026-11-24
 
 - Saving an event while Google is unreachable on an empty list now shows the

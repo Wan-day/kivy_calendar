@@ -1,6 +1,6 @@
 [project]
 name = "kivy-calendar-shared"
-version = "0.0.3"
+version = "0.1.0"
 description = "Calendar logic shared by the Kivy calendar backend and Android app"
 requires-python = ">=3.14"
 dependencies = [
