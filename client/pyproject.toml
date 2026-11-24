@@ -37,5 +37,9 @@ select = ["E", "F", "W", "I", "UP"]
 [tool.mypy]
 python_version = "3.14"
 
+[[tool.mypy.overrides]]
+module = ["kivy", "kivy.*"]
+ignore_missing_imports = true
+
 [tool.setuptools.package-data]
 kivy_calendar = ["fonts/*.ttf", "fonts/OFL.txt"]

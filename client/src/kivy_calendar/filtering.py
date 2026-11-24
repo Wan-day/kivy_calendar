@@ -4,25 +4,25 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import date
-from typing import Literal
+from typing import Final, Literal
 from zoneinfo import ZoneInfo
 
 from kivy_calendar.api import CalendarEvent
 
-SORT_START = "start"
-SORT_START_DESC = "start_desc"
-SORT_NAME = "name"
-DEFAULT_SORT = SORT_START
-SORT_ORDERS: tuple[str, ...] = (SORT_START, SORT_START_DESC, SORT_NAME)
-
 SortOrder = Literal["start", "start_desc", "name"]
+
+SORT_START: Final = "start"
+SORT_START_DESC: Final = "start_desc"
+SORT_NAME: Final = "name"
+DEFAULT_SORT: Final[SortOrder] = SORT_START
+SORT_ORDERS: tuple[str, ...] = (SORT_START, SORT_START_DESC, SORT_NAME)
 
 SORT_LABELS: tuple[str, ...] = (
     "Start: oldest first",
     "Start: newest first",
     "Name: A-Z",
 )
-SORT_BY_LABEL: dict[str, str] = {
+SORT_BY_LABEL: dict[str, SortOrder] = {
     SORT_LABELS[0]: SORT_START,
     SORT_LABELS[1]: SORT_START_DESC,
     SORT_LABELS[2]: SORT_NAME,
