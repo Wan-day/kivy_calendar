@@ -1,4 +1,4 @@
-"""Main screen listing the backend calendar events."""
+"""Main screen listing the calendar events."""
 
 from __future__ import annotations
 
@@ -20,12 +20,6 @@ from kivy.uix.spinner import Spinner
 from kivy.uix.widget import Widget
 
 from kivy_calendar import __version__
-from kivy_calendar.api import (
-    BackendClient,
-    BackendError,
-    CalendarEvent,
-    CalendarSummary,
-)
 from kivy_calendar.filtering import (
     DEFAULT_SORT,
     DEFAULT_SORT_LABEL,
@@ -44,6 +38,11 @@ from kivy_calendar.formatting import (
     event_clock,
     is_happening,
     short_date,
+)
+from kivy_calendar.models import (
+    CalendarEvent,
+    CalendarSummary,
+    ServiceError,
 )
 from kivy_calendar.screens.date_picker import DatePicker
 from kivy_calendar.screens.theme import (
@@ -70,6 +69,7 @@ from kivy_calendar.screens.theme import (
     primary_button,
 )
 from kivy_calendar.screens.ui import StatusBanner, input_box, plain_input
+from kivy_calendar.service import CalendarService
 
 CARD_HEIGHT = 68
 SORT_CHIP_WIDTH = 170
@@ -249,11 +249,11 @@ class DateFilterChip(FlatButton):
 
 
 class MainScreen(Screen):
-    """List backend events and open the add-event screen."""
+    """List calendar events and open the add-event screen."""
 
     def __init__(
         self,
-        client: BackendClient | None,
+        client: CalendarService | None,
         configuration_error: str | None = None,
         **kwargs: Any,
     ) -> None:
@@ -438,11 +438,11 @@ class MainScreen(Screen):
         )
         thread.start()
 
-    def _fetch_events(self, client: BackendClient) -> None:
+    def _fetch_events(self, client: CalendarService) -> None:
         """Fetch events off the UI thread and hand them back to the UI."""
         try:
             events = client.list_events()
-        except BackendError as error:
+        except ServiceError as error:
             message = error.message
             Clock.schedule_once(
                 lambda *_: self._set_status(
@@ -455,7 +455,7 @@ class MainScreen(Screen):
         if not self._calendars_loaded:
             try:
                 calendars = client.list_calendars()
-            except BackendError:
+            except ServiceError:
                 # Names are a nicety; the cards simply leave them out.
                 calendars = None
         Clock.schedule_once(lambda *_: self._show_events(events, calendars))
@@ -478,11 +478,11 @@ class MainScreen(Screen):
         )
         thread.start()
 
-    def _run_sync(self, client: BackendClient) -> None:
+    def _run_sync(self, client: CalendarService) -> None:
         """Run the sync off the UI thread and hand the count back to the UI."""
         try:
             synced = client.sync()
-        except BackendError as error:
+        except ServiceError as error:
             message = error.message
             Clock.schedule_once(lambda *_: self._on_sync_failed(message))
             return

@@ -11,10 +11,27 @@ import json
 import os
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote
+
+from kivy_calendar.models import (
+    CalendarEvent,
+    CalendarSummary,
+    FreeSlot,
+    ServiceError,
+    TimeZoneOption,
+)
+
+__all__ = [
+    "BackendClient",
+    "BackendError",
+    "CalendarEvent",
+    "CalendarSummary",
+    "FreeSlot",
+    "ServiceError",
+    "TimeZoneOption",
+]
 
 BASE_URL_ENV = "KIVY_CALENDAR_API_BASE_URL"
 TOKEN_ENV = "BACKEND_API_TOKEN"
@@ -22,64 +39,20 @@ DEFAULT_BASE_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT_SECONDS = 10.0
 
 
-class BackendError(Exception):
+class BackendError(ServiceError):
     """A backend API failure surfaced to the client."""
 
     def __init__(self, status_code: int, code: str, message: str) -> None:
         """Create the error."""
-        super().__init__(message)
+        super().__init__(code, message)
         self.status_code = status_code
-        self.code = code
-        self.message = message
-
-
-@dataclass(frozen=True)
-class CalendarEvent:
-    """A calendar event as returned by the backend."""
-
-    id: str
-    summary: str
-    start: datetime
-    end: datetime
-    start_timezone: str
-    end_timezone: str
-    calendar_id: str = ""
-    recurring_event_id: str | None = None
-    all_day: bool = False
-    description: str | None = None
-    recurrence: list[str] | None = None
-    extended_properties: dict[str, str] | None = None
-    # True when the backend answered 202: accepted but still waiting to sync.
-    queued: bool = False
-
-
-@dataclass(frozen=True)
-class CalendarSummary:
-    """A calendar the backend can write events to."""
-
-    id: str
-    summary: str
-    primary: bool = False
-
-
-@dataclass(frozen=True)
-class TimeZoneOption:
-    """A selectable IANA time zone with the backend's display label."""
-
-    name: str
-    label: str
-
-
-@dataclass(frozen=True)
-class FreeSlot:
-    """A free time window suggested by the backend."""
-
-    start: datetime
-    end: datetime
 
 
 class BackendClient:
-    """Small HTTP client for the backend calendar API."""
+    """Small HTTP client for the backend calendar API.
+
+    The desktop :class:`~kivy_calendar.service.CalendarService`.
+    """
 
     def __init__(
         self,

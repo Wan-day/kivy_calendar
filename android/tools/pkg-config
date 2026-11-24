@@ -1,0 +1,27 @@
+#!/bin/sh
+# pkg-config for Android builds (android/build.sh puts this first on PATH).
+#
+# python-for-android compiles with a fresh environment, so PKG_CONFIG_* cannot
+# be set from outside. During Android (cross) compiles CC is the NDK clang
+# targeting *-linux-android*: report every package as missing there, so Kivy
+# uses the SDL2 that python-for-android built instead of this PC's /usr/include
+# headers. Every other call goes to the real pkg-config.
+case "${CC:-}" in
+    *-linux-android*) exit 1 ;;
+esac
+here="$(cd "$(dirname "$0")" && pwd)"
+real=""
+old_ifs="$IFS"
+IFS=:
+for dir in $PATH; do
+    if [ "$dir" != "$here" ] && [ -x "$dir/pkg-config" ]; then
+        real="$dir/pkg-config"
+        break
+    fi
+done
+IFS="$old_ifs"
+if [ -z "$real" ]; then
+    echo "pkg-config: no system pkg-config found on PATH" >&2
+    exit 127
+fi
+exec "$real" "$@"

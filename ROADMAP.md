@@ -38,6 +38,8 @@ major bump to 1.0.0 marks the moment the Android build is usable.
 Patch releases can ship between any of the versions below. Known candidates:
 
 - ~~Show the app version in the app~~ (done in 0.0.2).
+- 0.1.1: scale layout sizes with screen density (`dp()`), so text fits its
+  boxes on phones; drop `setuptools` from the APK.
 - ~~A create queued while offline on an empty list still shows "No events yet"~~ (done in 0.0.3).
 - ~~`create_event` with a `recurring_event_id` inserts a new event instead of
   editing the occurrence~~ (done in 0.0.3: rejected; occurrences are updated).
@@ -59,6 +61,13 @@ Patch releases can ship between any of the versions below. Known candidates:
 
 Done when: the desktop build works unchanged and an APK installs and opens on
 an emulator.
+
+**Shipped in 0.1.0:** `CalendarService` interface with `BackendClient` and an
+`InMemoryCalendarService` (also on desktop with `KIVY_CALENDAR_SERVICE=memory`);
+`android/` build with Buildozer. python-for-android 2026.5.9 builds Python
+3.14.2 and has a pydantic-core recipe, so no Python downgrade or dataclass move
+is needed: the shared models import on the emulator (pinned pydantic 2.12.3).
+Found on the emulator: layout sizes are not density-scaled (0.1.1).
 
 ## 0.2.0: Android, read side
 

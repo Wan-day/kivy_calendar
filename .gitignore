@@ -35,3 +35,10 @@ bin/
 build/
 dist/
 .buildozer/
+
+# Android build (android/build.sh, Buildozer)
+android/app/
+android/.buildozer/
+android/bin/
+*.keystore
+*.jks

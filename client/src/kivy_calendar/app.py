@@ -5,27 +5,17 @@ from __future__ import annotations
 from kivy.app import App
 from kivy.core.window import Window
 from kivy.uix.screenmanager import ScreenManager
+from kivy.utils import platform
 
-from kivy_calendar.api import TOKEN_ENV, BackendClient
 from kivy_calendar.screens.add_event import AddEventScreen
 from kivy_calendar.screens.main import MainScreen
 from kivy_calendar.screens.theme import BACKGROUND
+from kivy_calendar.service import CalendarService, choose_service
 
 
-def build_client() -> tuple[BackendClient | None, str | None]:
-    """Build the backend client, reporting configuration problems.
-
-    The application still starts without a client so the window shows what is
-    missing instead of crashing on import.
-    """
-    try:
-        return BackendClient(), None
-    except ValueError as error:
-        message = (
-            f"Backend client is not configured: {error}. "
-            f"Set {TOKEN_ENV} and restart the app."
-        )
-        return None, message
+def build_client() -> tuple[CalendarService | None, str | None]:
+    """Return the calendar service for this platform and any setup error."""
+    return choose_service(platform=platform)
 
 
 class KivyCalendarApp(App):
@@ -35,7 +25,9 @@ class KivyCalendarApp(App):
 
     def build(self) -> ScreenManager:
         """Build the screen manager with the main and add-event screens."""
-        Window.size = (420, 760)
+        if platform not in ("android", "ios"):
+            # A phone-sized window on desktop; phones use their own screen.
+            Window.size = (420, 760)
         Window.clearcolor = BACKGROUND
         client, configuration_error = build_client()
         screen_manager = ScreenManager()
