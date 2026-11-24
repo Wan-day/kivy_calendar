@@ -115,6 +115,19 @@ class AndroidCalendarProvider:
         events.sort(key=lambda event: (event.start, event.id))
         return Result.ok(events)
 
+    def unsynced_event_ids(self) -> Result[set[str]]:
+        """Return ids of events changed on the phone that no account has yet.
+
+        The ids are Android event ids, which is ``Event.id`` of a single event
+        and ``Event.recurring_event_id`` of an occurrence of a series.
+        """
+        try:
+            return Result.ok(
+                {str(event_id) for event_id in self._store.dirty_event_ids()}
+            )
+        except Exception as error:  # noqa: BLE001 - JNI raises JavaException
+            return _store_failure(error)
+
     def get_event(self, calendar_id: str, event_id: str) -> Result[Event | None]:
         """Return a listed occurrence by id, or ``None`` when it is not listed."""
         listed = self.list_events()

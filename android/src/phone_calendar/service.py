@@ -43,6 +43,11 @@ class PhoneCalendarService:
     # Read by the event form: repeating occurrences open read-only here.
     edits_repeating_events = False
 
+    # Read by the event form after a save or delete: writes land in the phone's
+    # calendar first and Android syncs them to the account later.
+    saved_notice = "Saved on the phone. Android syncs it to your account."
+    deleted_notice = "Deleted on the phone. Android syncs it to your account."
+
     def __init__(
         self,
         provider: AndroidCalendarProvider,
@@ -92,7 +97,14 @@ class PhoneCalendarService:
         events = _value(
             self._provider.list_events(now - DEFAULT_PAST, now + DEFAULT_FUTURE)
         )
-        return [_client_event(event) for event in events]
+        # Not knowing which events are unsynced must not hide the events.
+        unsynced = self._provider.unsynced_event_ids().value or set()
+        return [
+            _client_event(
+                event, queued=(event.recurring_event_id or event.id) in unsynced
+            )
+            for event in events
+        ]
 
     def list_calendars(self) -> list[CalendarSummary]:
         """Return the calendars events can be written to."""
@@ -226,8 +238,11 @@ def _domain_event(event: CalendarEvent) -> Event:
         ) from error
 
 
-def _client_event(event: Event) -> CalendarEvent:
-    """Turn a shared event into the screens' event type."""
+def _client_event(event: Event, queued: bool = False) -> CalendarEvent:
+    """Turn a shared event into the screens' event type.
+
+    ``queued`` marks an event whose change has not reached the account yet.
+    """
     return CalendarEvent(
         id=event.id,
         summary=event.summary,
@@ -241,4 +256,5 @@ def _client_event(event: Event) -> CalendarEvent:
         description=event.description,
         recurrence=list(event.recurrence) if event.recurrence else None,
         extended_properties=dict(event.extended_properties) or None,
+        queued=queued,
     )
