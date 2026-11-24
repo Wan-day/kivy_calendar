@@ -1,8 +1,9 @@
 """Android entry point for Kivy Calendar.
 
 python-for-android starts the app from this file. The app code is copied next
-to it by ``android/build.sh``: the Kivy client (``kivy_calendar``) and the
-shared calendar logic (``core``, ``domain``, ``slots``, ``calendar_provider``).
+to it by ``android/build.sh``: the Kivy client (``kivy_calendar``), the shared
+calendar logic (``core``, ``domain``, ``slots``, ``calendar_provider``) and the
+phone-calendar service (``phone_calendar``).
 """
 
 from __future__ import annotations

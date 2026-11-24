@@ -1,0 +1,20 @@
+# Tool settings for the Android-only code in android/src (not a package:
+# android/build.sh copies it into the APK next to the client and shared code).
+
+[tool.ruff]
+line-length = 88
+target-version = "py314"
+# The shared and client packages are this project's own code.
+src = ["src", "../shared/src", "../client/src"]
+extend-exclude = ["app", ".buildozer", "bin"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.14"
+mypy_path = ["src", "../shared/src", "../client/src"]
+
+[[tool.mypy.overrides]]
+module = ["kivy", "kivy.*", "jnius", "android", "android.*"]
+ignore_missing_imports = true

@@ -1,0 +1,166 @@
+"""The calendar service the screens use on Android.
+
+It implements the client's :class:`~kivy_calendar.service.CalendarService` on
+top of :class:`~phone_calendar.provider.AndroidCalendarProvider`, and the
+client's access gate, so the app can ask for calendar permission first.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+
+from core.errors import ErrorCode, Result
+from domain.event import Event
+from domain.timezones import list_time_zones
+from kivy_calendar.models import (
+    CalendarEvent,
+    CalendarSummary,
+    FreeSlot,
+    ServiceError,
+    TimeZoneOption,
+)
+from phone_calendar.permissions import CalendarPermissions
+from phone_calendar.provider import (
+    DEFAULT_FUTURE,
+    DEFAULT_PAST,
+    READ_ONLY_MESSAGE,
+    AndroidCalendarProvider,
+)
+from slots.service import SlotService
+
+NOT_SUPPORTED = "not_supported"
+
+
+class PhoneCalendarService:
+    """Read the phone's calendars for the screens; saving arrives in 0.3.0."""
+
+    def __init__(
+        self,
+        provider: AndroidCalendarProvider,
+        permissions: CalendarPermissions,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        """Create the service."""
+        self._provider = provider
+        self._permissions = permissions
+        self._slots = SlotService(provider)
+        self._now = now
+
+    # Access gate -----------------------------------------------------------
+
+    def has_access(self) -> bool:
+        """Whether calendar permission is granted."""
+        return self._permissions.granted()
+
+    def request_access(self, on_result: Callable[[bool], None]) -> None:
+        """Ask Android for calendar permission."""
+        self._permissions.request(on_result)
+
+    def open_settings(self) -> None:
+        """Open the app's settings page so access can be granted there."""
+        self._permissions.open_settings()
+
+    # CalendarService ---------------------------------------------------------
+
+    def list_events(self) -> list[CalendarEvent]:
+        """Return occurrences from 30 days ago to 180 days ahead."""
+        now = self._now()
+        events = _value(
+            self._provider.list_events(now - DEFAULT_PAST, now + DEFAULT_FUTURE)
+        )
+        return [_client_event(event) for event in events]
+
+    def list_calendars(self) -> list[CalendarSummary]:
+        """Return the calendars events can be written to."""
+        calendars = _value(self._provider.list_calendars())
+        return [
+            CalendarSummary(
+                id=calendar.id, summary=calendar.summary, primary=calendar.primary
+            )
+            for calendar in calendars
+        ]
+
+    def list_time_zones(self) -> list[TimeZoneOption]:
+        """Return the curated time zones the backend offers too."""
+        return [
+            TimeZoneOption(name=option.name, label=option.label)
+            for option in list_time_zones(self._now())
+        ]
+
+    def create_event(self, event: CalendarEvent) -> CalendarEvent:
+        """Not available yet (0.3.0)."""
+        raise ServiceError(NOT_SUPPORTED, _capitalised(READ_ONLY_MESSAGE))
+
+    def update_event(
+        self,
+        event: CalendarEvent,
+        source_calendar_id: str = "",
+    ) -> CalendarEvent:
+        """Not available yet (0.3.0)."""
+        raise ServiceError(NOT_SUPPORTED, _capitalised(READ_ONLY_MESSAGE))
+
+    def delete_event(self, event_id: str, calendar_id: str = "") -> bool:
+        """Not available yet (0.3.0)."""
+        raise ServiceError(NOT_SUPPORTED, _capitalised(READ_ONLY_MESSAGE))
+
+    def sync(self) -> int:
+        """Re-read the calendar and return the occurrence count.
+
+        Asking Android to sync the accounts arrives in 0.4.0.
+        """
+        return len(self.list_events())
+
+    def find_free_slots(
+        self,
+        duration_minutes: int,
+        window_start: datetime,
+        window_end: datetime,
+        time_zone: str,
+    ) -> list[FreeSlot]:
+        """Find free windows in the phone's calendars."""
+        slots = _value(
+            self._slots.find_free_slots(
+                duration=timedelta(minutes=duration_minutes),
+                window_start=window_start,
+                window_end=window_end,
+                time_zone=time_zone,
+            )
+        )
+        return [FreeSlot(start=slot.start, end=slot.end) for slot in slots]
+
+
+def _value[T](result: Result[T]) -> T:
+    """Return a result's value or raise it as a ServiceError for the screens."""
+    if result.error is not None or result.value is None:
+        if result.error is None:
+            raise ServiceError("upstream_error", "the phone calendar returned nothing")
+        code = result.error.code
+        message = result.error.message or code.value
+        if code == ErrorCode.PERMISSION_DENIED:
+            message = "Calendar access is not granted. Allow it in the app settings."
+        raise ServiceError(code.value, message)
+    return result.value
+
+
+def _client_event(event: Event) -> CalendarEvent:
+    """Turn a shared event into the screens' event type."""
+    return CalendarEvent(
+        id=event.id,
+        summary=event.summary,
+        start=event.start,
+        end=event.end,
+        start_timezone=event.start_timezone,
+        end_timezone=event.end_timezone,
+        calendar_id=event.calendar_id,
+        recurring_event_id=event.recurring_event_id,
+        all_day=event.all_day,
+        description=event.description,
+        recurrence=list(event.recurrence) if event.recurrence else None,
+        extended_properties=dict(event.extended_properties) or None,
+    )
+
+
+def _capitalised(text: str) -> str:
+    """Start a message with a capital letter, for the status banner."""
+    return text[:1].upper() + text[1:] + "."

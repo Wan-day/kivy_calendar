@@ -81,6 +81,14 @@ Found on the emulator: layout sizes are not density-scaled (0.1.1).
 
 Done when: an emulator with a test Google account shows its events in the app.
 
+**Shipped in 0.2.0:** permission screen (Allow access, Open app settings after
+a refusal); `AndroidCalendarProvider` over `Calendars`/`Instances` with a fake
+store for desktop tests; the list, filters and calendar dropdown on the
+emulator, checked with a local test calendar (no Google account; see
+`android/README.md`). Also already working: free-time suggestions from the
+phone's events (planned for 0.4.0) and new events defaulting to the phone's
+time zone. Saving shows "not available yet" until 0.3.0.
+
 ## 0.3.0: Android, write side
 
 - Create, edit, delete and move events between calendars.

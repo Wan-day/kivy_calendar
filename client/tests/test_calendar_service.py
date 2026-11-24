@@ -157,9 +157,11 @@ def test_sample_events_are_around_now() -> None:
     assert len({event.id for event in events}) == len(events)
 
 
-def test_choose_service_uses_memory_on_android_and_on_request() -> None:
-    """Android, or KIVY_CALENDAR_SERVICE=memory, runs without a backend."""
-    android, android_error = choose_service({}, platform="android")
+def test_choose_service_uses_memory_on_request_on_any_platform() -> None:
+    """KIVY_CALENDAR_SERVICE=memory runs on sample events, also on Android."""
+    android, android_error = choose_service(
+        {"KIVY_CALENDAR_SERVICE": "memory"}, platform="android"
+    )
     requested, requested_error = choose_service(
         {"KIVY_CALENDAR_SERVICE": "memory"}, platform="linux"
     )
@@ -193,3 +195,24 @@ def test_choose_service_explains_a_missing_token() -> None:
     assert error is not None
     assert "BACKEND_API_TOKEN" in error
     assert "KIVY_CALENDAR_SERVICE=memory" in error
+
+
+def test_choose_service_reports_a_missing_phone_calendar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the Android package the app starts and says why."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "phone_calendar", None)
+
+    service, error = choose_service({}, platform="android")
+
+    assert service is None
+    assert error is not None and "phone calendar" in error
+
+
+def test_memory_service_is_not_an_access_gate() -> None:
+    """Only services that need permission show the permission screen."""
+    from kivy_calendar.service import AccessGate
+
+    assert not isinstance(InMemoryCalendarService(), AccessGate)

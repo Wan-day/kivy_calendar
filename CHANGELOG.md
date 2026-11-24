@@ -5,6 +5,19 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-24
+
+- Android reads the phone's own calendars. On first start the app asks for
+  calendar access (a screen with Allow access, and Open app settings after a
+  refusal), then lists the events of every visible calendar on the phone from
+  30 days back to 180 days ahead. Recurring events show as separate
+  occurrences; cancelled ones and hidden calendars are left out.
+- The calendar dropdown offers the phone calendars that accept new events,
+  and "Suggest a free time" works from the phone's events.
+- New events start in the phone's time zone on Android.
+- Saving on Android shows "not available yet" until 0.3.0.
+- The APK requests `READ_CALENDAR` and `WRITE_CALENDAR`.
+
 ## [0.1.1] - 2026-11-24
 
 - Layout sizes scale with screen density: every fixed pixel size in the
