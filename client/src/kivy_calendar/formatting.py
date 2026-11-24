@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from kivy_calendar.api import CalendarEvent
@@ -73,3 +73,61 @@ def localize_wall_clock(text: str, zone: str) -> datetime:
         shown = naive.isoformat(timespec="minutes")
         raise ValueError(f"{shown} does not exist in {zone}")
     return aware
+
+
+def short_date(day: date, today: date | None = None) -> str:
+    """Return ``Tue 24 Nov``, adding the year when it is not this year."""
+    current = today if today is not None else date.today()
+    if day.year != current.year:
+        return f"{day:%a} {day.day} {day:%b %Y}"
+    return f"{day:%a} {day.day} {day:%b}"
+
+
+def day_heading(day: date, today: date | None = None) -> str:
+    """Return the event-list heading for ``day``, e.g. ``Today · Tue 24 Nov``."""
+    current = today if today is not None else date.today()
+    names = {
+        current: "Today",
+        current + timedelta(days=1): "Tomorrow",
+        current - timedelta(days=1): "Yesterday",
+    }
+    label = short_date(day, current)
+    name = names.get(day)
+    return f"{name} · {label}" if name else label
+
+
+def _in_zone(value: datetime, zone: str) -> datetime:
+    """Return ``value`` in IANA ``zone``, unchanged when the zone is unknown."""
+    try:
+        return value.astimezone(ZoneInfo(zone)) if zone else value
+    except (ValueError, ZoneInfoNotFoundError):
+        return value
+
+
+def event_clock(event: CalendarEvent) -> tuple[str, str]:
+    """Return the start and end shown beside an event in the list.
+
+    Times are wall-clock in the event's own zones.  An end on a later day
+    shows that day instead of a time; all-day events return blanks.
+    """
+    if event.all_day:
+        return "", ""
+    start = _in_zone(event.start, event.start_timezone)
+    end = _in_zone(event.end, event.end_timezone)
+    if end.date() != start.date():
+        return f"{start:%H:%M}", f"{end.day} {end:%b}"
+    return f"{start:%H:%M}", f"{end:%H:%M}"
+
+
+def all_day_last_day(event: CalendarEvent) -> date:
+    """Return the last day an all-day event covers (its end is exclusive)."""
+    last = event.end.date() - timedelta(days=1)
+    return max(last, event.start.date())
+
+
+def is_happening(event: CalendarEvent, now: datetime | None = None) -> bool:
+    """Return whether a timed event is in progress at ``now``."""
+    if event.all_day:
+        return False
+    current = now if now is not None else datetime.now(UTC)
+    return event.start <= current < event.end

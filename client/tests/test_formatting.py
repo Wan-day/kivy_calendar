@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from kivy_calendar.api import CalendarEvent
 from kivy_calendar.formatting import (
+    all_day_last_day,
+    day_heading,
     default_event_times,
+    event_clock,
     format_event_when,
+    is_happening,
     localize_wall_clock,
+    short_date,
     to_input_value,
     to_wall_clock_value,
 )
@@ -139,3 +144,61 @@ def test_to_wall_clock_value_converts_into_the_zone() -> None:
     value = datetime(2026, 7, 15, 13, 0, tzinfo=ZoneInfo("UTC"))
 
     assert to_wall_clock_value(value, "Europe/Berlin") == "2026-07-15T15:00"
+
+
+def test_short_date_adds_the_year_only_outside_this_year() -> None:
+    """Dates read like Tue 24 Nov, with the year when it differs."""
+    today = date(2026, 11, 24)
+
+    assert short_date(date(2026, 11, 24), today) == "Tue 24 Nov"
+    assert short_date(date(2027, 1, 5), today) == "Tue 5 Jan 2027"
+
+
+def test_day_heading_names_today_tomorrow_and_yesterday() -> None:
+    """Nearby days get a name in front of the date."""
+    today = date(2026, 11, 24)
+
+    assert day_heading(today, today) == "Today \u00b7 Tue 24 Nov"
+    assert day_heading(date(2026, 11, 25), today) == "Tomorrow \u00b7 Wed 25 Nov"
+    assert day_heading(date(2026, 11, 23), today) == "Yesterday \u00b7 Mon 23 Nov"
+    assert day_heading(date(2026, 11, 26), today) == "Thu 26 Nov"
+
+
+def test_event_clock_shows_wall_clock_times_in_the_event_zone() -> None:
+    """Start and end read as local times; a later end day shows the day."""
+    utc = ZoneInfo("UTC")
+    same_day = _event(
+        datetime(2026, 11, 9, 8, 30, tzinfo=utc),
+        datetime(2026, 11, 9, 9, 0, tzinfo=utc),
+    )
+    overnight = _event(
+        datetime(2026, 11, 9, 22, 0, tzinfo=BERLIN),
+        datetime(2026, 11, 10, 1, 0, tzinfo=BERLIN),
+    )
+
+    assert event_clock(same_day) == ("09:30", "10:00")
+    assert event_clock(overnight) == ("22:00", "10 Nov")
+
+
+def test_all_day_helpers_use_the_inclusive_last_day() -> None:
+    """An all-day event ending on the 12th covers up to the 11th."""
+    event = _event(
+        datetime(2026, 11, 9, tzinfo=BERLIN),
+        datetime(2026, 11, 12, tzinfo=BERLIN),
+        all_day=True,
+    )
+
+    assert all_day_last_day(event) == date(2026, 11, 11)
+    assert event_clock(event) == ("", "")
+    assert not is_happening(event, datetime(2026, 11, 10, 12, 0, tzinfo=BERLIN))
+
+
+def test_is_happening_covers_start_but_not_end() -> None:
+    """An event is in progress from its start up to, not including, its end."""
+    event = _event(
+        datetime(2026, 11, 9, 9, 0, tzinfo=BERLIN),
+        datetime(2026, 11, 9, 10, 0, tzinfo=BERLIN),
+    )
+
+    assert is_happening(event, datetime(2026, 11, 9, 9, 0, tzinfo=BERLIN))
+    assert not is_happening(event, datetime(2026, 11, 9, 10, 0, tzinfo=BERLIN))

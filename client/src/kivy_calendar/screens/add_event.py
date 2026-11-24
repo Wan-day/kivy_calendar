@@ -11,13 +11,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from kivy.clock import Clock
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.button import Button
-from kivy.uix.checkbox import CheckBox
-from kivy.uix.popup import Popup
+from kivy.uix.modalview import ModalView
 from kivy.uix.screenmanager import Screen
 from kivy.uix.scrollview import ScrollView
-from kivy.uix.spinner import Spinner
-from kivy.uix.textinput import TextInput
+from kivy.uix.widget import Widget
 
 from kivy_calendar.api import (
     BackendClient,
@@ -33,81 +30,73 @@ from kivy_calendar.formatting import (
     localize_wall_clock,
     to_wall_clock_value,
 )
+from kivy_calendar.screens.theme import (
+    BACKGROUND,
+    CLEAR,
+    CORAL,
+    CORAL_TEXT,
+    DIVIDER,
+    FONT_SEMIBOLD,
+    INK,
+    MUTED,
+    OVERLAY,
+    SKY,
+    SURFACE,
+    FlatButton,
+    FlatSpinner,
+    Paint,
+    ToggleSwitch,
+    ghost_button,
+    icon_button,
+    outline_button,
+    primary_button,
+)
 from kivy_calendar.screens.time_picker import DateTimeField
-from kivy_calendar.screens.ui import wrapped_label
+from kivy_calendar.screens.ui import (
+    Card,
+    StatusBanner,
+    caption,
+    input_box,
+    plain_input,
+    wrapped_label,
+)
 
-ERROR_COLOR = (0.95, 0.42, 0.42, 1)
-STATUS_COLOR = (0.68, 0.68, 0.68, 1)
 QUEUED_NOTICE = "Saved. Google is unreachable, so it will sync automatically."
+SPINNER_WIDTH = 190
 
 
-def _field(caption: str, widget: Any) -> BoxLayout:
-    """Stack a caption above a fixed-height form input."""
-    box = BoxLayout(
-        orientation="vertical",
-        size_hint_y=None,
-        height=widget.height + 24,
-        spacing=2,
-    )
-    box.add_widget(
-        wrapped_label(
-            text=caption,
-            size_hint_y=None,
-            height=18,
-            font_size="13sp",
-            color=STATUS_COLOR,
-        )
-    )
-    box.add_widget(widget)
-    return box
-
-
-def _field_with_label(caption: str, widget: Any) -> tuple[BoxLayout, Any]:
-    """Stack a caption above a fixed-height form input and return it."""
-    box = BoxLayout(
-        orientation="vertical",
-        size_hint_y=None,
-        height=widget.height + 24,
-        spacing=2,
-    )
-    label = wrapped_label(
-        text=caption,
-        size_hint_y=None,
-        height=18,
-        font_size="13sp",
-        color=STATUS_COLOR,
-    )
-    box.add_widget(label)
-    box.add_widget(widget)
-    return box, label
-
-
-def _input(
-    hint: str,
-    text: str = "",
-    *,
-    height: int = 44,
-    multiline: bool = False,
-) -> TextInput:
-    """Create a padded text input for the event form."""
-    return TextInput(
+def _row_spinner(text: str = "", values: list[str] | None = None) -> FlatSpinner:
+    """Return a borderless dropdown that sits on the right of a form row."""
+    return FlatSpinner(
         text=text,
-        hint_text=hint,
-        multiline=multiline,
-        size_hint_y=None,
-        height=height,
-        padding=(10, 10),
+        values=values or [],
+        fill=CLEAR,
+        border=None,
+        text_color=MUTED,
+        icon="chevron_right",
+        halign="right",
+        size_hint=(None, None),
+        size=(SPINNER_WIDTH, 44),
     )
 
 
-def _time_zone_spinner(default: str) -> Spinner:
-    """Create a time zone dropdown; the backend fills in the choices."""
-    return Spinner(
-        text=default,
-        values=[default],
-        size_hint_y=None,
-        height=44,
-    )
+def _right(widget: Any, height: float = 56) -> BoxLayout:
+    """Right-align a fixed-size widget inside a form row."""
+    box = BoxLayout(orientation="horizontal", size_hint_x=None, padding=(0, 0))
+    box.add_widget(Widget())
+    holder = BoxLayout(orientation="vertical", size_hint_x=None)
+    holder.add_widget(Widget())
+    holder.add_widget(widget)
+    holder.add_widget(Widget())
+    box.add_widget(holder)
+
+    def fit(*_: Any) -> None:
+        holder.width = widget.width
+        box.width = widget.width
+
+    widget.bind(width=fit)
+    fit()
+    return box
 
 
 class AddEventScreen(Screen):
@@ -137,107 +126,131 @@ class AddEventScreen(Screen):
         self._time_zone_labels: dict[str, str] = {}
         self._curated_zones: list[TimeZoneOption] = []
 
-        self.summary = _input("Team standup")
-        self.calendar = Spinner(
-            text="",
-            values=[],
+        self.summary = plain_input(
+            "Team standup",
+            font_name=FONT_SEMIBOLD,
+            font_size="22sp",
             size_hint_y=None,
-            height=44,
+            height=48,
+            padding=(0, 8),
         )
-        self.start = DateTimeField()
-        self.end = DateTimeField()
+        self.calendar = _row_spinner()
+        self.start = DateTimeField(title="Start")
+        self.end = DateTimeField(title="End")
         self.start.on_user_change = self._keep_duration_after_start_change
-        self.start_timezone = _time_zone_spinner(self.time_zone)
-        self.end_timezone = _time_zone_spinner(self.time_zone)
-        self.description = _input("Optional notes", height=88, multiline=True)
-        self.all_day = CheckBox(size_hint=(None, None), size=(44, 44))
+        self.start_timezone = _row_spinner(self.time_zone, [self.time_zone])
+        self.end_timezone = _row_spinner(self.time_zone, [self.time_zone])
+        self.description = plain_input(
+            "Optional notes",
+            multiline=True,
+            padding=(0, 12),
+        )
+        self.all_day = ToggleSwitch()
 
         form = BoxLayout(
             orientation="vertical",
             size_hint_y=None,
-            spacing=10,
-            padding=(0, 4),
+            spacing=16,
+            padding=(20, 8, 20, 24),
         )
         form.bind(minimum_height=form.setter("height"))
-        form.add_widget(_field("Summary", self.summary))
-        form.add_widget(_field("Calendar", self.calendar))
 
-        all_day_row = BoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=44,
-            spacing=8,
-        )
-        all_day_row.add_widget(self.all_day)
-        all_day_row.add_widget(
-            wrapped_label(
-                text="All day",
-                size_hint_y=None,
-                height=44,
-                font_size="14sp",
-                color=STATUS_COLOR,
-            )
-        )
-        form.add_widget(all_day_row)
+        title_field = BoxLayout(orientation="vertical", size_hint_y=None, height=72)
+        title_field.add_widget(caption("Title"))
+        title_field.add_widget(self.summary)
+        underline = Widget(size_hint_y=None, height=2)
+        Paint(underline, SKY, radius=0)
+        title_field.add_widget(underline)
+        form.add_widget(title_field)
 
-        self._start_field, self._start_label = _field_with_label(
-            "Start (date and local time)", self.start
-        )
-        self._end_field, self._end_label = _field_with_label(
-            "End (date and local time)", self.end
-        )
-        form.add_widget(self._start_field)
-        form.add_widget(self._end_field)
-        form.add_widget(_field("Start time zone", self.start_timezone))
-        form.add_widget(_field("End time zone", self.end_timezone))
-        form.add_widget(_field("Description", self.description))
+        when = Card()
+        when.add_row("Calendar", _right(self.calendar))
+        when.add_row("All day", _right(self.all_day))
+        self._start_field = when.add_row("Starts", _right(self.start), height=56)
+        self._end_field = when.add_row("Ends", _right(self.end), height=56)
+        self._start_label = self._start_field.caption
+        self._end_label = self._end_field.caption
+        form.add_widget(when)
+
+        zones = Card()
+        zones.add_row("Start time zone", _right(self.start_timezone))
+        zones.add_row("End time zone", _right(self.end_timezone))
+        form.add_widget(zones)
 
         self.all_day.bind(active=self._on_all_day_changed)
-        scroll_view = ScrollView(bar_width=6)
-        scroll_view.add_widget(form)
 
-        self.status_label = wrapped_label(
-            size_hint_y=None,
-            height=40,
-            font_size="14sp",
-            color=STATUS_COLOR,
-        )
-
-        self.delete_button = Button(text="Delete", size_hint_y=None, height=48)
-        self.delete_button.bind(on_press=self.confirm_delete)
-        self.cancel_button = Button(text="Cancel", size_hint_y=None, height=48)
-        self.cancel_button.bind(on_press=self.cancel)
-        self.save_button = Button(text="Save", size_hint_y=None, height=48)
-        self.save_button.bind(on_press=self.save_event)
-        self.suggest_button = Button(
-            text="Suggest time",
+        self.suggest_button = outline_button(
+            "Suggest a free time",
+            icon="clock",
+            icon_size=18,
+            radius=14,
             size_hint_y=None,
             height=48,
         )
         self.suggest_button.bind(on_press=self.suggest_free_time)
-        buttons = BoxLayout(
-            orientation="horizontal",
-            size_hint_y=None,
-            height=48,
-            spacing=8,
-        )
-        buttons.add_widget(self.delete_button)
-        buttons.add_widget(self.cancel_button)
-        buttons.add_widget(self.save_button)
+        form.add_widget(self.suggest_button)
 
-        self.title_label = wrapped_label(
-            text="New event",
-            bold=True,
-            font_size="22sp",
+        notes = BoxLayout(orientation="vertical", size_hint_y=None, height=116)
+        notes.add_widget(caption("Notes"))
+        notes.add_widget(input_box(self.description, height=96, padding=(14, 0)))
+        form.add_widget(notes)
+
+        self.delete_button = ghost_button(
+            "Delete event",
+            color=CORAL_TEXT,
+            icon="trash",
+            icon_size=18,
             size_hint_y=None,
             height=44,
         )
-        layout = BoxLayout(orientation="vertical", padding=12, spacing=8)
-        layout.add_widget(self.title_label)
+        self.delete_button.bind(on_press=self.confirm_delete)
+        # Holds the delete button only while an existing event is open.
+        self._delete_slot = BoxLayout(size_hint_y=None, height=44)
+        form.add_widget(self._delete_slot)
+
+        scroll_view = ScrollView(bar_width=4)
+        scroll_view.add_widget(form)
+
+        self.cancel_button = icon_button("back", fill=CLEAR, border=None)
+        self.cancel_button.bind(on_press=self.cancel)
+        self.save_button = primary_button(
+            "Save", size_hint=(None, None), size=(84, 40)
+        )
+        self.save_button.bind(on_press=self.save_event)
+        self.title_label = wrapped_label(
+            text="New event",
+            font_name=FONT_SEMIBOLD,
+            font_size="17sp",
+        )
+        self.title_label.halign = "center"
+        save_box = BoxLayout(
+            orientation="vertical", size_hint_x=None, width=84, padding=(0, 2)
+        )
+        save_box.add_widget(self.save_button)
+        header = BoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=44,
+            padding=(12, 0, 16, 0),
+            spacing=8,
+        )
+        header.add_widget(self.cancel_button)
+        header.add_widget(self.title_label)
+        # Balance the save button so the title stays centered.
+        header.add_widget(Widget(size_hint_x=None, width=84 - 44))
+        header.add_widget(save_box)
+
+        self.status_label = StatusBanner(collapse=True)
+        status_box = BoxLayout(size_hint_y=None, height=0, padding=(20, 0))
+        status_box.add_widget(self.status_label)
+        self.status_label.bind(
+            height=lambda _, height: setattr(status_box, "height", height)
+        )
+
+        layout = BoxLayout(orientation="vertical", padding=(0, 20, 0, 0), spacing=8)
+        layout.add_widget(header)
+        layout.add_widget(status_box)
         layout.add_widget(scroll_view)
-        layout.add_widget(self.status_label)
-        layout.add_widget(self.suggest_button)
-        layout.add_widget(buttons)
         self.add_widget(layout)
 
         self.open_for(event)
@@ -575,7 +588,7 @@ class AddEventScreen(Screen):
         self.end.text = self._wall_clock(slot.end, end_zone)
         self._set_status("Suggested a free time.")
 
-    def _on_all_day_changed(self, instance: CheckBox, value: bool) -> None:
+    def _on_all_day_changed(self, instance: ToggleSwitch, value: bool) -> None:
         """Switch the form between timed and all-day input."""
         self._apply_all_day_mode(value)
         if value:
@@ -594,15 +607,9 @@ class AddEventScreen(Screen):
             self._fill_default_times()
 
     def _apply_all_day_mode(self, all_day: bool) -> None:
-        """Update field hints and captions for the chosen event kind."""
+        """Hide the times for all-day events and show them otherwise."""
         self.start.show_time = not all_day
         self.end.show_time = not all_day
-        if all_day:
-            self._start_label.text = "Start date (YYYY-MM-DD)"
-            self._end_label.text = "End date (YYYY-MM-DD, inclusive)"
-        else:
-            self._start_label.text = "Start (date and local time)"
-            self._end_label.text = "End (date and local time)"
         self.suggest_button.disabled = all_day or self.save_button.disabled
 
     def confirm_delete(self, *args: Any) -> None:
@@ -611,31 +618,46 @@ class AddEventScreen(Screen):
         if event is None:
             return
         summary = event.summary or "Untitled event"
-        content = BoxLayout(orientation="vertical", spacing=8, padding=8)
+        popup = ModalView(
+            size_hint=(None, None),
+            size=(320, 200),
+            auto_dismiss=False,
+            background="",
+            background_color=CLEAR,
+            overlay_color=OVERLAY,
+        )
+        content = BoxLayout(orientation="vertical", spacing=8, padding=20)
+        Paint(content, SURFACE, radius=20)
         content.add_widget(
             wrapped_label(
-                text=f"Delete \u201c{summary}\u201d?",
+                text="Delete event?",
+                font_name=FONT_SEMIBOLD,
+                font_size="17sp",
                 size_hint_y=None,
-                height=40,
+                height=28,
+            )
+        )
+        content.add_widget(
+            wrapped_label(
+                text=f"\u201c{summary}\u201d will be removed from Google Calendar.",
+                font_size="14sp",
+                color=MUTED,
             )
         )
         buttons = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=48,
+            height=44,
             spacing=8,
         )
-        keep_button = Button(text="Keep")
-        delete_button = Button(text="Delete")
+        keep_button = FlatButton(
+            text="Keep", fill=BACKGROUND, text_color=INK, border=DIVIDER
+        )
+        delete_button = FlatButton(text="Delete", fill=CORAL, text_color=INK)
         buttons.add_widget(keep_button)
         buttons.add_widget(delete_button)
         content.add_widget(buttons)
-        popup = Popup(
-            title="Delete event",
-            content=content,
-            size_hint=(0.85, 0.35),
-            auto_dismiss=False,
-        )
+        popup.add_widget(content)
 
         def keep(*_: Any) -> None:
             popup.dismiss()
@@ -834,12 +856,15 @@ class AddEventScreen(Screen):
         self.save_button.disabled = not enabled
         self.cancel_button.disabled = not enabled
         self.delete_button.disabled = not enabled or self.event is None
+        if self.event is None:
+            self._delete_slot.clear_widgets()
+        elif self.delete_button.parent is None:
+            self._delete_slot.add_widget(self.delete_button)
         self.suggest_button.disabled = not enabled or self.all_day.active
 
     def _set_status(self, text: str, *, error: bool = False) -> None:
         """Show a status or error message below the form."""
-        self.status_label.text = text
-        self.status_label.color = ERROR_COLOR if error else STATUS_COLOR
+        self.status_label.show(text, error=error)
 
     def cancel(self, *args: Any) -> None:
         """Close the event form."""
