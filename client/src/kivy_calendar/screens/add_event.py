@@ -215,8 +215,8 @@ class AddEventScreen(Screen):
         self._delete_slot = BoxLayout(size_hint_y=None, height=dp(44))
         form.add_widget(self._delete_slot)
 
-        scroll_view = ScrollView(bar_width=dp(4))
-        scroll_view.add_widget(form)
+        self.scroll_view = ScrollView(bar_width=dp(4))
+        self.scroll_view.add_widget(form)
 
         self.cancel_button = icon_button("back", fill=CLEAR, border=None)
         self.cancel_button.bind(on_press=self.cancel)
@@ -259,7 +259,7 @@ class AddEventScreen(Screen):
         )
         layout.add_widget(header)
         layout.add_widget(status_box)
-        layout.add_widget(scroll_view)
+        layout.add_widget(self.scroll_view)
         self.add_widget(layout)
 
         self.open_for(event)
@@ -278,6 +278,8 @@ class AddEventScreen(Screen):
         makes it an all-day event on that date.  Both are ignored when
         editing.
         """
+        self._release_text_inputs()
+        self.scroll_view.scroll_y = 1.0
         self.event = event
         self._new_event_id = uuid4().hex if event is None else ""
         # Services that cannot edit repeating occurrences (the phone calendar)
@@ -323,6 +325,30 @@ class AddEventScreen(Screen):
     def on_enter(self, *args: Any) -> None:
         """Clear any message left over from a previous visit."""
         self._show_default_status()
+
+    def on_pre_leave(self, *args: Any) -> None:
+        """Drop focus and handles as soon as the form starts to close."""
+        self._release_text_inputs()
+
+    def on_leave(self, *args: Any) -> None:
+        """Drop focus, selection and selection handles when the form closes."""
+        self._release_text_inputs()
+
+    def _release_text_inputs(self) -> None:
+        """Unfocus every text field and remove its selection handles.
+
+        On a phone the handles and the cut/copy/paste bubble live on the
+        Window, not in the form, so they stay on screen over every other view
+        unless they are removed explicitly.
+        """
+        for field in (self.summary, self.description):
+            field.cancel_long_touch_event()
+            field._trigger_show_handles.cancel()
+            field.focus = False
+            field.cancel_selection()
+            field._hide_cut_copy_paste()
+            field._hide_handles()
+        self.scroll_view.scroll_y = 1.0
 
     def _show_default_status(self) -> None:
         """Show the read-only note, or nothing."""
@@ -782,6 +808,7 @@ class AddEventScreen(Screen):
         self.event = None
         self._new_event_id = ""
         self._reset_form()
+        self._release_text_inputs()
         manager = self.manager
         if manager is not None:
             manager.current = "main"
@@ -952,6 +979,7 @@ class AddEventScreen(Screen):
 
     def cancel(self, *args: Any) -> None:
         """Close the event form."""
+        self._release_text_inputs()
         manager = self.manager
         if manager is not None:
             manager.current = "main"
