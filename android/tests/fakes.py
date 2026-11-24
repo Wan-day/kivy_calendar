@@ -200,3 +200,31 @@ class FakePermissions:
     def open_settings(self) -> None:
         """Record that the settings page was opened."""
         self.settings_opened += 1
+
+
+class FakeAccountSync:
+    """Account sync that stays busy for a set number of polls."""
+
+    def __init__(
+        self,
+        busy_polls: int = 0,
+        error: Exception | None = None,
+        forever: bool = False,
+    ) -> None:
+        """``busy_polls`` polls report busy; ``forever`` never finishes."""
+        self.requests: list[list[tuple[str, str]]] = []
+        self.polls = 0
+        self.busy_polls = busy_polls
+        self.forever = forever
+        self.error = error
+
+    def request(self, accounts: list[tuple[str, str]]) -> None:
+        """Record the request, or raise the configured error."""
+        if self.error is not None:
+            raise self.error
+        self.requests.append(list(accounts))
+
+    def busy(self, accounts: list[tuple[str, str]]) -> bool:
+        """Busy until ``busy_polls`` polls have passed."""
+        self.polls += 1
+        return self.forever or self.polls <= self.busy_polls

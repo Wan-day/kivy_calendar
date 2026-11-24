@@ -7,6 +7,7 @@ client's access gate, so the app can ask for calendar permission first.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
@@ -22,6 +23,7 @@ from kivy_calendar.models import (
     ServiceError,
     TimeZoneOption,
 )
+from phone_calendar.account_sync import AccountSync, NoAccountSync
 from phone_calendar.permissions import CalendarPermissions
 from phone_calendar.provider import (
     DEFAULT_FUTURE,
@@ -46,12 +48,27 @@ class PhoneCalendarService:
         provider: AndroidCalendarProvider,
         permissions: CalendarPermissions,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        account_sync: AccountSync | None = None,
+        sync_timeout: float = 30.0,
+        sync_poll: float = 1.0,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        """Create the service."""
+        """Create the service.
+
+        ``account_sync`` asks Android to sync (default: does nothing);
+        ``sync()`` waits up to ``sync_timeout`` seconds, polling every
+        ``sync_poll``. ``clock`` and ``sleep`` can be replaced in tests.
+        """
         self._provider = provider
         self._permissions = permissions
         self._slots = SlotService(provider)
         self._now = now
+        self._account_sync = account_sync or NoAccountSync()
+        self._sync_timeout = sync_timeout
+        self._sync_poll = sync_poll
+        self._clock = clock
+        self._sleep = sleep
 
     # Access gate -----------------------------------------------------------
 
@@ -127,11 +144,27 @@ class PhoneCalendarService:
         return False
 
     def sync(self) -> int:
-        """Re-read the calendar and return the occurrence count.
+        """Ask Android to sync the calendar accounts, then re-read.
 
-        Asking Android to sync the accounts arrives in 0.4.0.
+        Waits until Android reports the sync finished or the timeout passes
+        (the events are re-read either way). Local calendars never sync.
         """
+        accounts = _value(self._provider.accounts())
+        if accounts:
+            self._sync_accounts(accounts)
         return len(self.list_events())
+
+    def _sync_accounts(self, accounts: list[tuple[str, str]]) -> None:
+        """Request a sync and wait for it, turning JNI failures into errors."""
+        try:
+            self._account_sync.request(accounts)
+            deadline = self._clock() + self._sync_timeout
+            while self._account_sync.busy(accounts) and self._clock() < deadline:
+                self._sleep(self._sync_poll)
+        except Exception as error:  # noqa: BLE001 - JNI raises JavaException
+            raise ServiceError(
+                "upstream_error", f"asking Android to sync failed: {error}"
+            ) from error
 
     def find_free_slots(
         self,

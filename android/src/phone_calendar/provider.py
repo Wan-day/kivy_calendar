@@ -65,6 +65,22 @@ class AndroidCalendarProvider:
         calendars.sort(key=lambda calendar: (not calendar.primary, calendar.summary))
         return Result.ok(calendars)
 
+    def accounts(self) -> Result[list[tuple[str, str]]]:
+        """Return the distinct ``(name, type)`` accounts that sync calendars.
+
+        Local calendars (type ``LOCAL``) never sync and are left out.
+        """
+        rows = self._calendar_rows()
+        if rows.error is not None or rows.value is None:
+            return Result.fail(*_error(rows))
+        found: dict[tuple[str, str], None] = {}
+        for row in rows.value:
+            name = row.get("account_name")
+            kind = row.get("account_type")
+            if isinstance(name, str) and isinstance(kind, str) and kind != "LOCAL":
+                found[(name, kind)] = None
+        return Result.ok(list(found))
+
     def list_events(
         self,
         time_min: datetime | None = None,
