@@ -72,10 +72,95 @@ def _tint(colour: RGBA, weight: float = 0.22) -> RGBA:
     )
 
 
+# A frame longer than this is treated as this long when the grid coasts, so a
+# stalled frame on a slow phone cannot throw the grid across its whole height.
+MAX_COAST_FRAME = 0.05
+MAX_FLING = dp(2000)
+
+
 class FollowEffect(ScrollEffect):
-    """Scroll without bounce, and follow the finger from the first pixel."""
+    """Scroll without bounce, follow the finger, and coast without jumping.
+
+    Kivy's own effect misbehaves in three ways that show on a slow phone:
+
+    * ``reset`` (called when the value hits an end) replaces the touch history
+      by one sample stamped "now", so the release speed is measured over a few
+      microseconds and comes out near 10**7 px/s;
+    * ``update_velocity`` slows the speed by ``friction * dt / 0.017`` a frame,
+      which is more than the whole speed once a frame lasts over 0.34 s, so
+      the speed flips sign and the grid is flung to the opposite end;
+    * a programmatic ``scroll_y`` leaves the effect with its old value and
+      speed, which then overwrite the new position.
+    """
 
     drag_threshold = NumericProperty(0)
+
+    def reset(self, pos: float) -> None:
+        """Pin the value at an end and stop, keeping the real touch history."""
+        self.value = pos
+        self.velocity = 0
+
+    def stop(self, val: float, t: float | None = None) -> Any:
+        """Release the touch, with a sane fling speed."""
+        result = super().stop(val, t)
+        self.velocity = max(-MAX_FLING, min(MAX_FLING, self.velocity))
+        return result
+
+    def update_velocity(self, dt: float) -> None:
+        """Coast one frame, never counting more than ``MAX_COAST_FRAME``."""
+        super().update_velocity(min(dt, MAX_COAST_FRAME))
+
+    def halt(self, value: float | None = None) -> None:
+        """Stop coasting at once, and optionally jump to ``value``."""
+        self.velocity = 0
+        self.is_manual = False
+        if value is not None:
+            self.value = value
+
+
+def moved_beyond_slop(touch: Any) -> bool:
+    """Return whether a touch is now further than ``TAP_SLOP`` from its start.
+
+    ``ox``/``oy`` and ``x``/``y`` go through the same coordinate transforms
+    (ScrollView shifts both when it replays a touch to its child), so their
+    difference is the finger's real travel in either space.
+    """
+    start_x, start_y = touch.opos
+    return abs(touch.x - start_x) > TAP_SLOP or abs(touch.y - start_y) > TAP_SLOP
+
+
+class GridScroll(ScrollView):
+    """A ScrollView that never turns a swipe into a tap.
+
+    When the whole swipe arrives in one frame (a slow phone merges the moves
+    into the release), ScrollView still sees mode ``unknown`` at the release
+    and replays the touch to its child as a tap.  Counting such a gesture as a
+    scroll lets the effect apply the travel and fling.
+    """
+
+    def on_scroll_start(self, touch: Any, check_children: bool = True) -> Any:
+        """Measure the swipe from where the finger really went down."""
+        result = super().on_scroll_start(touch, check_children)
+        effect = self.effect_y
+        if (
+            effect is not None
+            and effect.is_manual
+            and isinstance(touch.ud.get(self._get_uid()), dict)
+            and touch.oy != touch.y
+        ):
+            effect.start(touch.oy)
+        return result
+
+    def on_scroll_stop(self, touch: Any, check_children: bool = True) -> Any:
+        """Count a release that travelled past the tap slop as a scroll."""
+        state = touch.ud.get(self._get_uid())
+        if (
+            isinstance(state, dict)
+            and state.get("mode") == "unknown"
+            and moved_beyond_slop(touch)
+        ):
+            state["mode"] = "scroll"
+        return super().on_scroll_stop(touch, check_children)
 
 
 class EventBlock(ButtonBehavior, Label):
@@ -170,6 +255,7 @@ class TimeGrid(FloatLayout):
         self.hour_labels: list[Label] = []
         self._tap_start: tuple[float, float] | None = None
         self._tap_on_block = False
+        self._dragged = False
 
         with self.canvas.before:
             Color(*DIVIDER)
@@ -212,7 +298,7 @@ class TimeGrid(FloatLayout):
                 block = TitleBlock(
                     placed.event, self.colour_for(placed.event.calendar_id)
                 )
-                block.bind(on_release=lambda b: self.open_event(b.event))
+                block.bind(on_release=self._release_block)
                 self.blocks.append((block, placed))
                 self.add_widget(block)
         self._place()
@@ -297,11 +383,25 @@ class TimeGrid(FloatLayout):
         """Return whether a window point is on an event block."""
         return any(block.collide_point(x, y) for block, _ in self.blocks)
 
+    def _release_block(self, block: EventBlock) -> None:
+        """Open a block's event, unless the finger travelled to get here."""
+        if not self._dragged:
+            self.open_event(block.event)
+
     def on_touch_down(self, touch: Any) -> bool:
-        """Remember where a touch started and whether it began on a block."""
-        inside = self.collide_point(*touch.pos)
-        self._tap_start = touch.pos if inside else None
-        self._tap_on_block = inside and self._block_at(*touch.pos)
+        """Remember where a touch started and whether it began on a block.
+
+        ScrollView may replay a touch after the finger has moved on, so the
+        start is the touch's original position, and a touch that has already
+        travelled past the slop is a swipe that nothing here may react to.
+        """
+        start = touch.opos
+        inside = self.collide_point(*start)
+        self._dragged = moved_beyond_slop(touch)
+        self._tap_start = start if inside and not self._dragged else None
+        self._tap_on_block = inside and self._block_at(*start)
+        if self._dragged:
+            return False
         return super().on_touch_down(touch)
 
     def on_touch_up(self, touch: Any) -> bool:
@@ -310,6 +410,7 @@ class TimeGrid(FloatLayout):
         A touch that began on a block, or that is being replayed to a grabbing
         widget, is never an empty-slot tap: the block's own release handles it.
         """
+        self._dragged = moved_beyond_slop(touch)
         handled = super().on_touch_up(touch)
         grabber = getattr(touch, "grab_current", None)
         if grabber is not None and grabber is not self:
@@ -318,7 +419,7 @@ class TimeGrid(FloatLayout):
         on_block, self._tap_on_block = self._tap_on_block, False
         if handled or start is None or on_block:
             return handled
-        if abs(touch.x - start[0]) > TAP_SLOP or abs(touch.y - start[1]) > TAP_SLOP:
+        if self._dragged:
             return False
         if self._block_at(*touch.pos):
             return False
@@ -352,6 +453,7 @@ class WeekView(BoxLayout):
         self.events: list[CalendarEvent] = []
         self.week_layout: WeekLayout | None = None
         self._scroll_pending = True
+        self._good_scroll_y = 1.0
 
         self.previous_button = icon_button("chevron_left", border=None)
         self.previous_button.bind(on_release=lambda *_: self.shift_week(-1))
@@ -387,12 +489,18 @@ class WeekView(BoxLayout):
         self.all_day_strip = BoxLayout(orientation="horizontal", size_hint_y=None)
         self.all_day_strip.height = 0
         self.grid = TimeGrid(self.open_event, self._on_empty_tap, self.colour_for)
-        self.scroll = ScrollView(
+        # scroll_distance: travel that starts a scroll, below TAP_SLOP so a
+        # gesture is never both.  scroll_timeout: ScrollView hands the touch
+        # to the grid and stops scrolling if the finger has not travelled
+        # scroll_distance by then (and 3 frames passed), so on a slow phone a
+        # short timeout loses the scroll; a tap needs no hand-off, ScrollView
+        # replays it on release.
+        self.scroll = GridScroll(
             do_scroll_x=False,
             bar_width=0,
             effect_cls=FollowEffect,
             scroll_distance=dp(6),
-            scroll_timeout=250,
+            scroll_timeout=1000,
         )
         self.scroll.add_widget(self.grid)
         self.scroll.bind(size=self._apply_pending_scroll)
@@ -449,15 +557,23 @@ class WeekView(BoxLayout):
         """Scroll the grid so ``hour`` is at the top of the view."""
         spare = self.grid.height - self.scroll.height
         if spare <= 0:
-            self.scroll.scroll_y = 1
+            self._set_scroll_y(1)
             return
-        self.scroll.scroll_y = min(1.0, max(0.0, 1 - hour * HOUR_HEIGHT / spare))
+        self._set_scroll_y(min(1.0, max(0.0, 1 - hour * HOUR_HEIGHT / spare)))
+
+    def _set_scroll_y(self, value: float) -> None:
+        """Jump to ``value`` and stop any coasting that would undo the jump."""
+        self.scroll.scroll_y = value
+        effect = self.scroll.effect_y
+        if isinstance(effect, FollowEffect):
+            effect.halt(effect.max * self.scroll.scroll_y)
 
     def _reset_scroll(self) -> None:
         """Go back to 07:00, also after the size settles."""
         self._scroll_pending = True
-        if self.scroll.effect_y is not None:
-            self.scroll.effect_y.cancel()
+        effect = self.scroll.effect_y
+        if isinstance(effect, FollowEffect):
+            effect.halt()
         self.scroll_to_hour()
 
     def _on_parent(self, _view: Any, parent: Any) -> None:
@@ -467,8 +583,13 @@ class WeekView(BoxLayout):
 
     def _clamp_scroll(self, _scroll: Any, value: float) -> None:
         """Keep ``scroll_y`` inside [0, 1], whatever an effect did."""
-        if not 0.0 <= value <= 1.0:
-            self.scroll.scroll_y = min(1.0, max(0.0, value if value == value else 1))
+        if value != value:
+            # NaN: keep the last good position rather than jumping anywhere.
+            self.scroll.scroll_y = self._good_scroll_y
+        elif not 0.0 <= value <= 1.0:
+            self.scroll.scroll_y = min(1.0, max(0.0, value))
+        else:
+            self._good_scroll_y = value
 
     def _apply_pending_scroll(self, *_: Any) -> None:
         """Keep 07:00 at the top while the view settles to its real size."""
