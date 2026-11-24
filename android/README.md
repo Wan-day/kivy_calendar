@@ -53,7 +53,7 @@ into `~/.buildozer` and `android/.buildozer/`.
 ## Build, install, run
 
 ```sh
-android/build.sh                       # debug APK -> android/bin/*.apk
+android/build.sh                       # debug APK -> android/bin/ (old APKs are removed)
 adb install -r android/bin/kivycalendar-*-x86_64-debug.apk
 adb shell monkey -p io.github.wanday.kivycalendar -c android.intent.category.LAUNCHER 1
 adb logcat -s python                   # the app's Python and Kivy log
@@ -67,9 +67,10 @@ To install on a phone, add `arm64-v8a` to `android.archs` in `buildozer.spec`
 
 ## Known issues
 
-- Fixed pixel sizes are not scaled by screen density, so on a phone the text
-  is too large for its boxes (fonts use `sp`, layout sizes plain pixels).
-  Fix planned for 0.1.1: wrap layout sizes in Kivy's `dp()`.
+- The Back button closes the app instead of going back a screen (handled in
+  0.6.0, phone polish).
 - The APK also ships `setuptools`, which the app does not need.
+- Layout sizes are in `dp` (fonts in `sp`) so they scale with screen
+  density; use `dp()` for any new pixel size in the screens.
 - On a slow software-rendered emulator, Android may show "System UI isn't
   responding" while the app starts; choose Wait.
