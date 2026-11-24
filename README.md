@@ -4,15 +4,15 @@ A calendar app to track things easier
 
 ## Status
 
-Version **0.1.0** (see `VERSION`). Changes per version are in
+Version **0.2.0** (see `VERSION`). Changes per version are in
 [CHANGELOG.md](CHANGELOG.md); the plan up to the 1.0.0 Android release is in
 [ROADMAP.md](ROADMAP.md).
 
 The backend, the FastAPI calendar API, a basic runnable Kivy client, a Docker
 Compose deployment, and CI are implemented. A standalone Android build that
 uses the phone's own calendar instead of the backend is in progress: since
-0.1.0 the APK builds and runs on the emulator with sample events
-(`android/README.md`).
+0.2.0 the APK asks for calendar access and lists the phone's events; saving
+arrives in 0.3.0 (`android/README.md`).
 
 ## Layout
 
@@ -21,8 +21,8 @@ uses the phone's own calendar instead of the backend is in progress: since
 | `shared/src/` | Calendar logic both builds use: `core` (errors, config, SQLite helper), `domain` (event and calendar models, time zones), `slots` (free-slot search) and `calendar_provider` (the provider interface). No FastAPI or Google imports. |
 | `backend/src/` | Desktop/self-hosted backend: FastAPI API, Google Calendar provider and OAuth helper, sync service, cache, retry queue. |
 | `client/src/` | Kivy app: screens, theme, and the HTTP client for the backend. |
-| `android/` | Android build: `buildozer.spec`, `build.sh`, entry point; the Android calendar provider is planned. See `android/README.md`. |
-| `tests/` | Tests for `shared` and `backend`, by module. Client tests live in `client/tests/`. |
+| `android/` | Android build: `buildozer.spec`, `build.sh`, entry point, and `src/phone_calendar` (reads the phone's calendar). See `android/README.md`. |
+| `tests/` | Tests for `shared` and `backend`, by module. Client tests live in `client/tests/`, Android tests in `android/tests/`. |
 | `docker/` | Dockerfile and Compose file for the backend. |
 
 - **Backend**: domain event model, SQLite cache, durable retry queue drained by
@@ -290,6 +290,7 @@ pytest
 ruff check .
 mypy shared/src backend/src tests
 (cd client && mypy src)
+(cd android && mypy src)
 ```
 
 Client tests need a display. CI runs them under a virtual X server:
