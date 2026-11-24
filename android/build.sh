@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build the Kivy Calendar APK with Buildozer.
 #
-# Copies the app code into android/app/ (generated, git-ignored), then runs
+# Copies the app code (client, shared and android/src) into android/app/
+# (generated, git-ignored), then runs
 # Buildozer from android/. Extra arguments go to Buildozer; the default is a
 # debug build:
 #
@@ -25,6 +26,7 @@ for package in core domain slots; do
     cp -r "$root/shared/src/$package" "$app/$package"
 done
 cp "$root/shared/src/calendar_provider.py" "$app/calendar_provider.py"
+cp -r "$here/src/phone_calendar" "$app/phone_calendar"
 find "$app" -name __pycache__ -type d -prune -exec rm -rf {} +
 
 # Buildozer's own tools (Cython, its python-for-android) must be on PATH, and

@@ -21,9 +21,9 @@ requirements = python3,kivy,pydantic==2.12.3,pydantic-core,annotated-types,typin
 orientation = portrait
 fullscreen = 0
 
-# No permissions yet: the 0.1.0 build runs on in-memory sample events.
-# READ_CALENDAR and WRITE_CALENDAR arrive with the Android provider (0.2.0).
-android.permissions =
+# Calendar access only (no internet). WRITE_CALENDAR is requested together
+# with READ_CALENDAR so saving (0.3.0) does not ask the user a second time.
+android.permissions = READ_CALENDAR, WRITE_CALENDAR
 
 android.api = 34
 android.minapi = 26
