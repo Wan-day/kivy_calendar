@@ -99,6 +99,12 @@ time zone. Saving shows "not available yet" until 0.3.0.
 Done when: changes made in the app appear in Google Calendar on the web after
 Android syncs.
 
+**Shipped in 0.3.0:** create, edit, move and delete single events in the
+phone's calendar, with duplicate protection through `uid2445`, all-day events
+as UTC midnights and per-end time zones; repeating occurrences open read-only.
+Checked on the emulator with local test calendars; checking the Google
+Calendar website needs a test Google account on the device.
+
 ## 0.4.0: Android, Sync and free time
 
 - **Sync** asks Android to sync the calendar accounts now, then reloads.
@@ -121,6 +127,8 @@ Done when: both views work on desktop and Android.
 
 - Real phone layouts: no fixed window size, on-screen keyboard never covers
   the focused field, the back button closes dialogs and screens.
+- Returning to the app after it was in the background redraws the screen
+  (it stays black in 0.3.0).
 - App icon, name and splash screen.
 - Performance check: a filled list in under 3 s with about 1,000 events.
 

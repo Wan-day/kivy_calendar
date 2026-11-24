@@ -5,6 +5,19 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24
+
+- Android saves to the phone's calendar: create, edit and delete single
+  events, and move them to another calendar by picking it in the form.
+  Saving the same new event twice keeps one copy. All-day events and each
+  end's time zone are stored the way Android expects.
+- Occurrences of repeating events open read-only on Android, with a note to
+  edit them in the phone's calendar app.
+- The calendar and time-zone dropdown rows scale with screen density, and the
+  All day switch fades when it is locked.
+- The delete dialog says the event will be deleted from your calendar (it no
+  longer names Google Calendar).
+
 ## [0.2.0] - 2026-11-24
 
 - Android reads the phone's own calendars. On first start the app asks for
