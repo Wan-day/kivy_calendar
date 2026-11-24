@@ -37,7 +37,7 @@ major bump to 1.0.0 marks the moment the Android build is usable.
 
 Patch releases can ship between any of the versions below. Known candidates:
 
-- Show the app version in the app (for example under the title).
+- ~~Show the app version in the app~~ (done in 0.0.2).
 - A create queued while offline on an empty list still shows "No events yet".
 - `create_event` with a `recurring_event_id` inserts a new event instead of
   editing the occurrence.

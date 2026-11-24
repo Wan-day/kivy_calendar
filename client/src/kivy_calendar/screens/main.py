@@ -19,6 +19,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.widget import Widget
 
+from kivy_calendar import __version__
 from kivy_calendar.api import (
     BackendClient,
     BackendError,
@@ -273,9 +274,24 @@ class MainScreen(Screen):
             f"{today:%A}, {today.day} {today:%B}", font_size="13sp", color=MUTED
         )
         self.title = _text("Calendar", font_name=FONT_BOLD, font_size="28sp")
+        self.version_label = _text(f"v{__version__}", font_size="12sp", color=MUTED)
+        # Sit the version on the title's baseline, to its right.
+        version_box = BoxLayout(
+            orientation="vertical", size_hint_x=None, padding=(0, 0, 0, 5)
+        )
+        version_box.add_widget(Widget())
+        version_box.add_widget(self.version_label)
+        self.version_label.bind(
+            width=lambda _, width: setattr(version_box, "width", width)
+        )
+        version_box.width = self.version_label.width
+        title_row = BoxLayout(orientation="horizontal", spacing=8)
+        title_row.add_widget(self.title)
+        title_row.add_widget(version_box)
+        title_row.add_widget(Widget())
         title_box = BoxLayout(orientation="vertical", spacing=2)
         title_box.add_widget(self.date_label)
-        title_box.add_widget(self.title)
+        title_box.add_widget(title_row)
         self.sync_button = icon_button("sync")
         self.sync_button.bind(on_press=lambda *_: self.sync_events())
         self.refresh_button = icon_button("refresh")
