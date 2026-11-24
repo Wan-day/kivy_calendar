@@ -32,7 +32,7 @@ from kivy_calendar.screens.theme import (
     chip_button,
     icon_button,
 )
-from kivy_calendar.screens.week import TAP_SLOP, ColourFor, EventBlock
+from kivy_calendar.screens.week import NAV_HEIGHT, TAP_SLOP, ColourFor, EventBlock
 
 NEW_EVENT_MINUTE = 9 * 60
 NUMBER_ROW = dp(20)
@@ -269,8 +269,14 @@ class MonthView(BoxLayout):
         )
         self.title_label.bind(size=lambda lbl, size: setattr(lbl, "text_size", size))
         nav = BoxLayout(
-            orientation="horizontal", size_hint_y=None, height=dp(44), spacing=dp(4)
+            orientation="horizontal",
+            size_hint_y=None,
+            height=NAV_HEIGHT,
+            spacing=dp(4),
         )
+        for button in (self.previous_button, self.next_button, self.today_button):
+            button.height = NAV_HEIGHT
+            button.pos_hint = {"center_y": 0.5}
         nav.add_widget(self.previous_button)
         nav.add_widget(self.title_label)
         nav.add_widget(self.next_button)

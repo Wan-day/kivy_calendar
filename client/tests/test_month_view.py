@@ -568,3 +568,15 @@ def test_grid_views_end_above_the_new_event_button(
 
     main_screen.show_view("list")
     assert main_screen.content.padding[3] == 0
+
+
+def test_nav_row_chip_and_arrows_share_a_vertical_centre() -> None:
+    """Today is as tall as the arrows and sits on the same centre line."""
+    view, _ = _month()
+    nav = view.previous_button.parent
+    nav.do_layout()
+
+    buttons = (view.previous_button, view.next_button, view.today_button)
+    assert len({b.height for b in buttons}) == 1
+    centres = {round(b.center_y, 3) for b in buttons}
+    assert centres == {round(nav.center_y, 3)}
