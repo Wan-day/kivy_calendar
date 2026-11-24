@@ -565,11 +565,15 @@ class MainScreen(Screen):
         )
         self.event_list.clear_widgets()
         if not visible:
-            self._set_status(
+            empty_text = (
                 "No events match the filters."
                 if filtered
-                else "No events yet. Tap New event to create one.",
+                else "No events yet. Tap New event to create one."
             )
+            if self._notice:
+                empty_text = self._notice
+                self._notice = ""
+            self._set_status(empty_text)
             return
         count_text = f"{len(visible)} event" + ("" if len(visible) == 1 else "s")
         if self._notice:

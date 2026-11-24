@@ -856,6 +856,27 @@ def test_queued_save_returns_to_main_with_a_notice(
     assert "will sync automatically" not in main_screen.status_label.text
 
 
+def test_queued_save_notice_shows_when_the_event_list_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The notice is not dropped when there are no events to list."""
+    _run_inline(monkeypatch)
+    client = FakeClient()
+    client.queued = True
+    manager, main_screen, add_event_screen = _make_screens(client)
+    manager.current = "add_event"
+    add_event_screen.open_for(None)
+    event = add_event_screen._build_event()
+    assert event is not None
+
+    add_event_screen._persist_event(client, event, editing=False)
+    main_screen._show_events([])
+    assert "will sync automatically" in main_screen.status_label.text
+    main_screen._show_events([])
+    assert "will sync automatically" not in main_screen.status_label.text
+    assert "No events yet" in main_screen.status_label.text
+
+
 def test_queued_delete_returns_to_main_with_a_notice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
