@@ -5,6 +5,18 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-11-24
+
+- Saving an event while Google is unreachable on an empty list now shows the
+  "will sync automatically" notice instead of "No events yet".
+- Creating an event that names an occurrence of a recurring series is
+  rejected with `invalid_argument` (HTTP 400) instead of inserting a separate
+  event in Google; occurrences are edited with an update.
+- The new-event form's default start and end are always real times in the
+  zone, also on daylight-saving change nights.
+- The Kivy client type-checks with mypy (Kivy imports ignored), and CI runs
+  it.
+
 ## [0.0.2] - 2026-11-24
 
 - The main screen shows the app version next to the "Calendar" title.
