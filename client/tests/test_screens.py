@@ -1337,3 +1337,53 @@ def test_permission_screen_offers_settings_after_a_refusal(
     assert screen.settings_button.parent is not None
     assert gate.settings_opened == 1
     assert not screen.allow_button.disabled
+
+
+def _occurrence() -> Any:
+    return replace(
+        _sample_event(),
+        id="event-1_1762675200000",
+        recurring_event_id="event-1",
+    )
+
+
+def test_repeating_occurrences_open_read_only_when_the_service_says_so() -> None:
+    """The phone service cannot edit occurrences; the form locks itself."""
+    from kivy_calendar.screens.add_event import REPEATING_NOTE
+
+    client = FakeClient()
+    client.edits_repeating_events = False  # type: ignore[attr-defined]
+    _, _, add_event_screen = _make_screens(client)
+
+    add_event_screen.open_for(_occurrence())
+
+    assert add_event_screen.read_only
+    assert add_event_screen.title_label.text == "Repeating event"
+    assert add_event_screen.status_label.text == REPEATING_NOTE
+    assert add_event_screen.summary.readonly
+    assert add_event_screen.start.disabled
+    assert add_event_screen.save_button.disabled
+    assert add_event_screen.delete_button.disabled
+    assert add_event_screen.all_day.opacity < 1
+    # Loading the calendars must not unlock the dropdown again.
+    add_event_screen._on_calendars_loaded(client.list_calendars())
+    assert add_event_screen.calendar.disabled
+
+    add_event_screen.open_for(None)
+
+    assert not add_event_screen.read_only
+    assert not add_event_screen.summary.readonly
+    assert not add_event_screen.start.disabled
+    assert not add_event_screen.save_button.disabled
+    assert add_event_screen.all_day.opacity == 1
+
+
+def test_services_that_edit_occurrences_keep_the_form_editable() -> None:
+    """The desktop backend edits occurrences, so nothing is locked there."""
+    _, _, add_event_screen = _make_screens(FakeClient())
+
+    add_event_screen.open_for(_occurrence())
+
+    assert not add_event_screen.read_only
+    assert not add_event_screen.save_button.disabled
+    assert add_event_screen.title_label.text == "Edit event"

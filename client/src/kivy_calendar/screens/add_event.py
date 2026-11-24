@@ -63,6 +63,10 @@ from kivy_calendar.screens.ui import (
 from kivy_calendar.service import CalendarService
 
 QUEUED_NOTICE = "Saved. Google is unreachable, so it will sync automatically."
+REPEATING_NOTE = (
+    "This is one occurrence of a repeating event. Repeating events can't be "
+    "changed here yet; edit them in your phone's calendar app."
+)
 SPINNER_WIDTH = dp(190)
 
 
@@ -264,6 +268,13 @@ class AddEventScreen(Screen):
         """Fill the form for creating a new event or editing ``event``."""
         self.event = event
         self._new_event_id = uuid4().hex if event is None else ""
+        # Services that cannot edit repeating occurrences (the phone calendar)
+        # open them read-only.
+        self.read_only = (
+            event is not None
+            and event.recurring_event_id is not None
+            and not getattr(self.client, "edits_repeating_events", True)
+        )
         self.calendar.text = ""
         if event is None:
             self.title_label.text = "New event"
@@ -287,14 +298,35 @@ class AddEventScreen(Screen):
             )
             self.description.text = event.description or ""
             self._apply_all_day_mode(event.all_day)
+        if self.read_only:
+            self.title_label.text = "Repeating event"
+        self._set_fields_editable(not self.read_only)
         self._set_buttons_enabled(True)
-        self._set_status("")
+        self._show_default_status()
         self._load_calendars()
         self._load_time_zones()
 
     def on_enter(self, *args: Any) -> None:
         """Clear any message left over from a previous visit."""
-        self._set_status("")
+        self._show_default_status()
+
+    def _show_default_status(self) -> None:
+        """Show the read-only note, or nothing."""
+        self._set_status(REPEATING_NOTE if self.read_only else "")
+
+    def _set_fields_editable(self, editable: bool) -> None:
+        """Lock or unlock every input of the form."""
+        self.summary.readonly = not editable
+        self.description.readonly = not editable
+        for widget in (
+            self.calendar,
+            self.all_day,
+            self.start,
+            self.end,
+            self.start_timezone,
+            self.end_timezone,
+        ):
+            widget.disabled = not editable
 
     def save_event(self, *args: Any) -> None:
         """Validate the form and save the event in the background."""
@@ -438,7 +470,7 @@ class AddEventScreen(Screen):
             self._labels_by_calendar[calendar.id] = label
             labels.append(label)
         self.calendar.values = labels
-        self.calendar.disabled = not labels
+        self.calendar.disabled = not labels or self.read_only
         self._select_current_calendar()
 
     def _on_calendars_failed(self, message: str) -> None:
@@ -644,7 +676,7 @@ class AddEventScreen(Screen):
         )
         content.add_widget(
             wrapped_label(
-                text=f"\u201c{summary}\u201d will be removed from Google Calendar.",
+                text=f"\u201c{summary}\u201d will be deleted from your calendar.",
                 font_size="14sp",
                 color=MUTED,
             )
@@ -858,14 +890,15 @@ class AddEventScreen(Screen):
 
     def _set_buttons_enabled(self, enabled: bool) -> None:
         """Enable or disable the form actions."""
-        self.save_button.disabled = not enabled
+        locked = getattr(self, "read_only", False)
+        self.save_button.disabled = not enabled or locked
         self.cancel_button.disabled = not enabled
-        self.delete_button.disabled = not enabled or self.event is None
+        self.delete_button.disabled = not enabled or self.event is None or locked
         if self.event is None:
             self._delete_slot.clear_widgets()
         elif self.delete_button.parent is None:
             self._delete_slot.add_widget(self.delete_button)
-        self.suggest_button.disabled = not enabled or self.all_day.active
+        self.suggest_button.disabled = not enabled or self.all_day.active or locked
 
     def _set_status(self, text: str, *, error: bool = False) -> None:
         """Show a status or error message below the form."""

@@ -5,11 +5,11 @@ the phone's own calendar store (Android `CalendarContract`), with Android's
 account sync carrying changes to Google Calendar: no server, no Google sign-in
 and no credentials in the app.
 
-**Status (0.2.0):** the app asks for calendar access, then lists the events
-of every visible calendar on the phone (30 days back to 180 days ahead,
-recurring events as separate occurrences) and suggests free times from them.
-Saving to the phone calendar arrives in 0.3.0; until then Save shows a
-message. See `ROADMAP.md`.
+**Status (0.3.0):** the app asks for calendar access, lists the events of
+every visible calendar on the phone (30 days back to 180 days ahead), and
+creates, edits, moves and deletes single events. Occurrences of repeating
+events are read-only. Free times come from the phone's events. See
+`ROADMAP.md`.
 
 Decided: minimum Android 8.0 (API 26), sideloaded APK only (no Google Play),
 editing whole recurring series is out of scope for the first release.
@@ -21,7 +21,7 @@ editing whole recurring series is out of scope for the first release.
 | `buildozer.spec` | APK settings: package `io.github.wanday.kivycalendar`, API 34, min API 26, x86_64 (emulator) for now, `READ_CALENDAR` and `WRITE_CALENDAR` only. The version is read from `kivy_calendar.__version__`. |
 | `build.sh` | Copies `client/src/kivy_calendar`, the shared packages from `shared/src` and `src/phone_calendar` into `app/` (generated, git-ignored), then runs Buildozer. Removes old APKs first. |
 | `main.py` | Entry point: imports the shared code once (logged as `[KivyCalendar] shared code imported`), then starts the app. |
-| `src/phone_calendar/` | The phone's calendar as the app's service: `store.py` (reads `Calendars`/`Instances` rows through pyjnius), `provider.py` (`AndroidCalendarProvider`, the shared `CalendarProvider`), `service.py` (`PhoneCalendarService`, the screens' `CalendarService` plus the access gate), `permissions.py`. |
+| `src/phone_calendar/` | The phone's calendar as the app's service: `store.py` (reads `Calendars`/`Instances` and writes `Events` rows through pyjnius), `provider.py` (`AndroidCalendarProvider`, the shared `CalendarProvider`), `service.py` (`PhoneCalendarService`, the screens' `CalendarService` plus the access gate), `permissions.py`. |
 | `tests/` | Desktop tests for `phone_calendar` with a fake calendar store (`fakes.py`); part of the normal `pytest` run. |
 | `pyproject.toml` | ruff and mypy settings for `src/` (not a package). |
 | `tools/pkg-config` | Hides this PC's pkg-config packages from Android compiles; without it Kivy picks up the desktop SDL2 headers and the build fails. |
@@ -94,10 +94,23 @@ cache and take minutes. `android/build.sh android clean` starts over.
 To install on a phone, add `arm64-v8a` to `android.archs` in `buildozer.spec`
 (`arm64-v8a, x86_64`); it roughly doubles build time and APK size.
 
+## Writing to the phone's calendar
+
+- New events get the app's own id in `uid2445`; saving the same new event
+  again updates it instead of adding a copy.
+- All-day events are stored as UTC midnights in the `UTC` zone, as Android
+  requires; timed events keep their start and end zones.
+- Changing an event's calendar copies it into the new calendar and deletes the
+  original (Android ties an event to its account). If the delete fails, the
+  copy is removed again.
+- Repeating events can only be read; the form opens their occurrences
+  read-only.
+
 ## Known issues
 
-- The Back button closes the app instead of going back a screen (handled in
-  0.6.0, phone polish).
+- The Back button (and Escape) closes the app instead of going back a screen,
+  and after the app has been in the background the screen can stay black
+  until it is restarted. Both are part of the phone polish in 0.6.0.
 - The APK also ships `setuptools`, which the app does not need.
 - Layout sizes are in `dp` (fonts in `sp`) so they scale with screen
   density; use `dp()` for any new pixel size in the screens.
