@@ -230,16 +230,6 @@ def test_a_missing_permission_is_reported_not_raised() -> None:
     assert events.error.code == ErrorCode.PERMISSION_DENIED
 
 
-def test_writes_are_not_available_yet() -> None:
-    """Saving arrives in 0.3.0; until then writes return INVALID_STATE."""
-    provider = _provider(FakeCalendarStore())
-
-    result = provider.delete_event("1", "7")
-
-    assert result.error is not None
-    assert result.error.code == ErrorCode.INVALID_STATE
-
-
 def test_get_event_finds_a_listed_occurrence() -> None:
     """get_event looks the id up among the listed occurrences."""
     start = datetime.now(UTC).replace(microsecond=0)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -102,18 +103,6 @@ def test_finds_free_slots_around_phone_events() -> None:
     assert slots[0].start >= window_start + timedelta(hours=1)
 
 
-def test_saving_is_not_available_yet() -> None:
-    """Writes raise a clear ServiceError until 0.3.0."""
-    service = _service(_store_with_events())
-    event = service.list_events()[0]
-
-    with pytest.raises(ServiceError) as error:
-        service.create_event(event)
-
-    assert error.value.code == "not_supported"
-    assert "0.3.0" in error.value.message
-
-
 def test_missing_permission_has_a_helpful_message() -> None:
     """A permission failure tells the user where to allow access."""
     service = _service(
@@ -145,3 +134,98 @@ def test_access_gate_passes_through_to_android_permissions() -> None:
 def test_sync_re_reads_the_calendar() -> None:
     """Sync returns the occurrence count."""
     assert _service(_store_with_events()).sync() == 2
+
+
+def _new_event(**changes: object) -> CalendarEvent:
+    start = datetime(2026, 11, 26, 9, 30, tzinfo=BERLIN)
+    values: dict[str, object] = {
+        "id": "app-id-7",
+        "summary": "Dentist",
+        "start": start,
+        "end": start + timedelta(hours=1),
+        "start_timezone": "Europe/Berlin",
+        "end_timezone": "Europe/Berlin",
+        "calendar_id": "1",
+    }
+    values.update(changes)
+    return CalendarEvent(**values)  # type: ignore[arg-type]
+
+
+def _writable_store() -> FakeCalendarStore:
+    return FakeCalendarStore(
+        calendars=[
+            calendar_row(1, "me@example.com", primary=1),
+            calendar_row(2, "Work"),
+        ]
+    )
+
+
+def test_create_edit_and_delete_round_trip() -> None:
+    """The screens can save, change and delete phone events."""
+    store = _writable_store()
+    service = _service(store)
+
+    created = service.create_event(_new_event())
+    listed = service.list_events()
+    assert [event.summary for event in listed] == ["Dentist"]
+
+    service.update_event(
+        replace(listed[0], summary="Dentist, room 4"), source_calendar_id="1"
+    )
+    assert [event.summary for event in service.list_events()] == ["Dentist, room 4"]
+
+    queued = service.delete_event(created.id, "1")
+    assert queued is False
+    assert service.list_events() == []
+
+
+def test_changing_the_calendar_moves_the_event() -> None:
+    """An edit that picks another calendar saves and then moves the event."""
+    store = _writable_store()
+    service = _service(store)
+    service.create_event(_new_event())
+    (event,) = service.list_events()
+
+    service.update_event(
+        replace(event, summary="Dentist (work)", calendar_id="2"),
+        source_calendar_id="1",
+    )
+
+    (moved,) = service.list_events()
+    assert moved.calendar_id == "2"
+    assert moved.summary == "Dentist (work)"
+    assert len(store.event_rows) == 1
+
+
+def test_repeating_occurrences_are_read_only_for_the_screens() -> None:
+    """The form opens them read-only; a save attempt explains why."""
+    first = datetime(2026, 11, 24, 18, 0, tzinfo=BERLIN)
+    store = _writable_store()
+    store.instance_rows = [
+        instance_row(
+            9,
+            1,
+            millis(first),
+            millis(first + timedelta(hours=1)),
+            "Gym",
+            rrule="FREQ=WEEKLY",
+        )
+    ]
+    service = _service(store)
+    (occurrence,) = service.list_events()
+
+    assert service.edits_repeating_events is False
+    with pytest.raises(ServiceError) as error:
+        service.update_event(replace(occurrence, summary="x"), "1")
+    assert "repeating events" in error.value.message
+
+
+def test_bad_input_is_a_service_error() -> None:
+    """An event whose end is before its start is reported, not raised raw."""
+    service = _service(_writable_store())
+    event = _new_event()
+
+    with pytest.raises(ServiceError) as error:
+        service.create_event(replace(event, end=event.start - timedelta(hours=1)))
+
+    assert error.value.code == "invalid_event"

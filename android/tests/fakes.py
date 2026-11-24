@@ -90,6 +90,12 @@ class FakeCalendarStore:
         self.instance_rows = instances or []
         self.error = error
         self.windows: list[tuple[int, int]] = []
+        # Events table for writes; single events here also appear as
+        # occurrences, as on a phone.
+        self.event_rows: dict[int, Row] = {}
+        self.next_id = 100
+        # Make the next delete report 0 rows (to test rollbacks).
+        self.fail_next_delete = False
 
     def calendars(self) -> list[Row]:
         """Return the calendar rows, or raise the configured error."""
@@ -102,11 +108,73 @@ class FakeCalendarStore:
         if self.error is not None:
             raise self.error
         self.windows.append((begin_ms, end_ms))
-        return [
-            row
-            for row in self.instance_rows
-            if row["begin"] < end_ms and row["end"] > begin_ms
+        rows = self.instance_rows + [
+            _as_instance(row) for row in self.event_rows.values()
         ]
+        return [row for row in rows if row["begin"] < end_ms and row["end"] > begin_ms]
+
+    def event(self, event_id: int) -> Row | None:
+        """Return one event row."""
+        self._raise()
+        row = self.event_rows.get(event_id)
+        return dict(row) if row is not None else None
+
+    def find_event_by_uid(self, uid: str) -> Row | None:
+        """Return the event whose uid2445 is ``uid``."""
+        self._raise()
+        for row in self.event_rows.values():
+            if row.get("uid2445") == uid:
+                return dict(row)
+        return None
+
+    def insert_event(self, values: Row) -> int:
+        """Insert an event and return its new id."""
+        self._raise()
+        event_id = self.next_id
+        self.next_id += 1
+        self.event_rows[event_id] = {"_id": event_id, **values}
+        return event_id
+
+    def update_event(self, event_id: int, values: Row) -> int:
+        """Change columns of one event."""
+        self._raise()
+        row = self.event_rows.get(event_id)
+        if row is None:
+            return 0
+        row.update(values)
+        return 1
+
+    def delete_event(self, event_id: int) -> int:
+        """Delete one event."""
+        self._raise()
+        if self.fail_next_delete:
+            self.fail_next_delete = False
+            return 0
+        return 1 if self.event_rows.pop(event_id, None) is not None else 0
+
+    def _raise(self) -> None:
+        if self.error is not None:
+            raise self.error
+
+
+def _as_instance(row: Row) -> Row:
+    """An occurrence row for a single (non-repeating) event row."""
+    return {
+        "_id": row["_id"] * 1000,
+        "event_id": row["_id"],
+        "begin": row["dtstart"],
+        "end": row["dtend"],
+        "title": row.get("title"),
+        "description": row.get("description"),
+        "allDay": row.get("allDay", 0),
+        "eventTimezone": row.get("eventTimezone"),
+        "eventEndTimezone": row.get("eventEndTimezone"),
+        "calendar_id": row.get("calendar_id"),
+        "rrule": row.get("rrule"),
+        "original_id": row.get("original_id"),
+        "availability": row.get("availability", 0),
+        "eventStatus": row.get("eventStatus", 1),
+    }
 
 
 class FakePermissions:

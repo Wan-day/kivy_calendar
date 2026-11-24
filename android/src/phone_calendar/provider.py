@@ -1,8 +1,9 @@
 """The shared :class:`~calendar_provider.CalendarProvider` over the phone's calendar.
 
-Reads come from Android's calendar store, which Android keeps in sync with
-each account on the phone (Google, Exchange, local). Writing arrives in 0.3.0;
-until then every write returns an ``INVALID_STATE`` result.
+Reads and writes go to Android's calendar store, which Android keeps in sync
+with each account on the phone (Google, Exchange, local). Single events can be
+created, changed, moved and deleted; occurrences of a repeating series are
+read-only for now.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from phone_calendar.store import (
     ACCESS_CONTRIBUTOR,
     AVAILABILITY_FREE,
     STATUS_CANCELED,
+    UID_COLUMN,
     CalendarStore,
     Row,
 )
@@ -31,8 +33,9 @@ DEFAULT_PAST = timedelta(days=30)
 DEFAULT_FUTURE = timedelta(days=180)
 # Android allows zero-length events; the shared model needs end > start.
 MIN_DURATION = timedelta(minutes=1)
-READ_ONLY_MESSAGE = (
-    "saving to the phone calendar is not available yet; it arrives in 0.3.0"
+REPEATING_MESSAGE = (
+    "repeating events can't be changed in Kivy Calendar yet; "
+    "edit them in your phone's calendar app"
 )
 
 
@@ -109,12 +112,50 @@ class AndroidCalendarProvider:
         return Result.ok(None)
 
     def create_event(self, event: Event) -> Result[Event]:
-        """Not available yet (0.3.0)."""
-        return Result.fail(ErrorCode.INVALID_STATE, READ_ONLY_MESSAGE)
+        """Save a new event; the returned copy carries Android's event id.
+
+        ``event.id`` is the app's own id. It is stored in ``uid2445``, so
+        saving the same new event again updates it instead of adding a second
+        copy. A blank ``calendar_id`` means the primary writable calendar.
+        """
+        if event.recurring_event_id:
+            return Result.fail(ErrorCode.INVALID_STATE, REPEATING_MESSAGE)
+        calendar = self._writable_calendar(event.calendar_id)
+        if calendar.error is not None or calendar.value is None:
+            return Result.fail(*_error(calendar))
+        values = _event_values(event)
+        values["calendar_id"] = int(calendar.value)
+        try:
+            existing = self._store.find_event_by_uid(event.id)
+            if existing is not None:
+                android_id = int(existing["_id"])
+                self._store.update_event(android_id, values)
+            else:
+                values[UID_COLUMN] = event.id
+                android_id = self._store.insert_event(values)
+        except Exception as error:  # noqa: BLE001 - JNI raises JavaException
+            return _store_failure(error)
+        return Result.ok(
+            event.model_copy(
+                update={"id": str(android_id), "calendar_id": calendar.value}
+            )
+        )
 
     def update_event(self, event: Event) -> Result[Event]:
-        """Not available yet (0.3.0)."""
-        return Result.fail(ErrorCode.INVALID_STATE, READ_ONLY_MESSAGE)
+        """Change a single event in place; its calendar stays the same.
+
+        Moving to another calendar is :meth:`move_event`.
+        """
+        android_id = _android_id(event.id)
+        if android_id is None or event.recurring_event_id:
+            return Result.fail(ErrorCode.INVALID_STATE, REPEATING_MESSAGE)
+        try:
+            changed = self._store.update_event(android_id, _event_values(event))
+        except Exception as error:  # noqa: BLE001 - JNI raises JavaException
+            return _store_failure(error)
+        if changed == 0:
+            return Result.fail(ErrorCode.NOT_FOUND, f"event {event.id} not found")
+        return Result.ok(event)
 
     def move_event(
         self,
@@ -122,12 +163,86 @@ class AndroidCalendarProvider:
         event_id: str,
         destination_calendar_id: str,
     ) -> Result[Event]:
-        """Not available yet (0.3.0)."""
-        return Result.fail(ErrorCode.INVALID_STATE, READ_ONLY_MESSAGE)
+        """Copy the event into another calendar, then delete the original.
+
+        Android ties an event to its calendar's account, so moving is a copy
+        and a delete. If the delete fails the copy is removed again.
+        """
+        android_id = _android_id(event_id)
+        if android_id is None:
+            return Result.fail(ErrorCode.INVALID_STATE, REPEATING_MESSAGE)
+        destination = self._writable_calendar(destination_calendar_id)
+        if destination.error is not None or destination.value is None:
+            return Result.fail(*_error(destination))
+        try:
+            row = self._store.event(android_id)
+        except Exception as error:  # noqa: BLE001 - JNI raises JavaException
+            return _store_failure(error)
+        if row is None:
+            return Result.fail(ErrorCode.NOT_FOUND, f"event {event_id} not found")
+        if row.get("rrule") or row.get("original_id") is not None:
+            return Result.fail(ErrorCode.INVALID_STATE, REPEATING_MESSAGE)
+        if str(row.get("calendar_id")) == destination.value:
+            current = self._event(_instance_like(row), None)
+            if current is None:
+                return Result.fail(ErrorCode.UPSTREAM_ERROR, "event cannot be read")
+            return Result.ok(current)
+        original = self._event(_instance_like(row), None)
+        if original is None:
+            return Result.fail(ErrorCode.UPSTREAM_ERROR, "event cannot be read")
+        values = _event_values(original)
+        values["calendar_id"] = int(destination.value)
+        values[UID_COLUMN] = row.get(UID_COLUMN)
+        try:
+            new_id = self._store.insert_event(values)
+            if self._store.delete_event(android_id) == 0:
+                self._store.delete_event(new_id)
+                return Result.fail(
+                    ErrorCode.UPSTREAM_ERROR,
+                    "the original event could not be removed; nothing was moved",
+                )
+        except Exception as error:  # noqa: BLE001 - JNI raises JavaException
+            return _store_failure(error)
+        return Result.ok(
+            original.model_copy(
+                update={"id": str(new_id), "calendar_id": destination.value}
+            )
+        )
 
     def delete_event(self, calendar_id: str, event_id: str) -> Result[None]:
-        """Not available yet (0.3.0)."""
-        return Result.fail(ErrorCode.INVALID_STATE, READ_ONLY_MESSAGE)
+        """Delete a single event."""
+        android_id = _android_id(event_id)
+        if android_id is None:
+            return Result.fail(ErrorCode.INVALID_STATE, REPEATING_MESSAGE)
+        try:
+            deleted = self._store.delete_event(android_id)
+        except Exception as error:  # noqa: BLE001 - JNI raises JavaException
+            return _store_failure(error)
+        if deleted == 0:
+            return Result.fail(ErrorCode.NOT_FOUND, f"event {event_id} not found")
+        return Result.ok(None)
+
+    def _writable_calendar(self, calendar_id: str) -> Result[str]:
+        """Return ``calendar_id`` if events can be saved there.
+
+        A blank id picks the primary writable calendar (or the first one).
+        """
+        calendars = self.list_calendars()
+        if calendars.error is not None or calendars.value is None:
+            return Result.fail(*_error(calendars))
+        if not calendar_id:
+            if not calendars.value:
+                return Result.fail(
+                    ErrorCode.INVALID_STATE,
+                    "this phone has no calendar that accepts new events",
+                )
+            return Result.ok(calendars.value[0].id)
+        if any(calendar.id == calendar_id for calendar in calendars.value):
+            return Result.ok(calendar_id)
+        return Result.fail(
+            ErrorCode.INVALID_ARGUMENT,
+            "events can't be saved to that calendar; choose another one",
+        )
 
     def _calendar_rows(self) -> Result[list[Row]]:
         """Read the calendar table, turning store failures into results."""
@@ -183,6 +298,49 @@ class AndroidCalendarProvider:
         except ValidationError as error:
             logger.warning("skipping occurrence %s: %s", event_id, error)
             return None
+
+
+def _event_values(event: Event) -> Row:
+    """``Events`` columns for a single event (without calendar and uid).
+
+    Android stores all-day events as UTC midnights in the ``UTC`` zone, with
+    an exclusive end date.
+    """
+    if event.all_day:
+        first = event.start.date()
+        after = max(event.end.date(), first + timedelta(days=1))
+        start_ms = _millis(_midnight(first, "UTC"))
+        end_ms = _millis(_midnight(after, "UTC"))
+        start_zone = end_zone = "UTC"
+    else:
+        start_ms = _millis(event.start)
+        end_ms = _millis(event.end)
+        start_zone = event.start_timezone
+        end_zone = event.end_timezone
+    return {
+        "title": event.summary,
+        "description": event.description,
+        "dtstart": start_ms,
+        "dtend": end_ms,
+        "allDay": 1 if event.all_day else 0,
+        "eventTimezone": start_zone,
+        "eventEndTimezone": end_zone,
+    }
+
+
+def _instance_like(row: Row) -> Row:
+    """Shape an ``Events`` row like an ``Instances`` row for mapping."""
+    return {
+        **row,
+        "event_id": row.get("_id"),
+        "begin": row.get("dtstart"),
+        "end": row.get("dtend"),
+    }
+
+
+def _android_id(event_id: str) -> int | None:
+    """Android's numeric id of a single event; ``None`` for occurrences."""
+    return int(event_id) if event_id.isdigit() else None
 
 
 def _calendar_info(row: Row) -> CalendarInfo | None:
