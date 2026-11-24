@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 
-from phone_calendar.store import Row
+from phone_calendar.store import Row, syncing_calendar_ids
 
 GOOGLE = "com.google"
 LOCAL = "LOCAL"
@@ -29,13 +29,14 @@ def calendar_row(
     visible: int = 1,
     primary: int = 0,
     account: str = "test@example.com",
+    account_type: str = GOOGLE,
 ) -> Row:
     """A ``CalendarContract.Calendars`` row (700 = owner access)."""
     return {
         "_id": calendar_id,
         "calendar_displayName": name,
         "account_name": account,
-        "account_type": GOOGLE,
+        "account_type": account_type,
         "calendar_access_level": access,
         "visible": visible,
         "isPrimary": primary,
@@ -127,6 +128,16 @@ class FakeCalendarStore:
                 return dict(row)
         return None
 
+    def dirty_event_ids(self) -> set[int]:
+        """Return ids of dirty events in calendars that sync."""
+        self._raise()
+        syncing = syncing_calendar_ids(self.calendar_rows)
+        return {
+            event_id
+            for event_id, row in self.event_rows.items()
+            if row.get("dirty") == 1 and str(row.get("calendar_id")) in syncing
+        }
+
     def insert_event(self, values: Row) -> int:
         """Insert an event and return its new id."""
         self._raise()
@@ -200,3 +211,31 @@ class FakePermissions:
     def open_settings(self) -> None:
         """Record that the settings page was opened."""
         self.settings_opened += 1
+
+
+class FakeAccountSync:
+    """Account sync that stays busy for a set number of polls."""
+
+    def __init__(
+        self,
+        busy_polls: int = 0,
+        error: Exception | None = None,
+        forever: bool = False,
+    ) -> None:
+        """``busy_polls`` polls report busy; ``forever`` never finishes."""
+        self.requests: list[list[tuple[str, str]]] = []
+        self.polls = 0
+        self.busy_polls = busy_polls
+        self.forever = forever
+        self.error = error
+
+    def request(self, accounts: list[tuple[str, str]]) -> None:
+        """Record the request, or raise the configured error."""
+        if self.error is not None:
+            raise self.error
+        self.requests.append(list(accounts))
+
+    def busy(self, accounts: list[tuple[str, str]]) -> bool:
+        """Busy until ``busy_polls`` polls have passed."""
+        self.polls += 1
+        return self.forever or self.polls <= self.busy_polls

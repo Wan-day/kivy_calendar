@@ -9,6 +9,7 @@ __all__ = ["PhoneCalendarService", "create_service", "device_time_zone"]
 
 def create_service() -> PhoneCalendarService:
     """Build the service on a device: JNI calendar store and real permissions."""
+    from phone_calendar.account_sync import JniAccountSync
     from phone_calendar.permissions import AndroidCalendarPermissions
     from phone_calendar.provider import AndroidCalendarProvider
     from phone_calendar.store import JniCalendarStore
@@ -16,6 +17,7 @@ def create_service() -> PhoneCalendarService:
     return PhoneCalendarService(
         AndroidCalendarProvider(JniCalendarStore(), time_zone=device_time_zone()),
         AndroidCalendarPermissions(),
+        account_sync=JniAccountSync(),
     )
 
 

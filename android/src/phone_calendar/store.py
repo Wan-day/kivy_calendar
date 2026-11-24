@@ -63,10 +63,23 @@ EVENT_COLUMNS = (
 )
 UID_COLUMN = "uid2445"
 
+# Events columns read to find changes the account has not received yet.
+DIRTY_COLUMNS = ("_id", "calendar_id", "dirty")
+
 # Values from CalendarContract.
 ACCESS_CONTRIBUTOR = 500  # Calendars.CAL_ACCESS_CONTRIBUTOR: can write events
 AVAILABILITY_FREE = 1  # Events.AVAILABILITY_FREE: shown as "free"
 STATUS_CANCELED = 2  # Events.STATUS_CANCELED
+ACCOUNT_TYPE_LOCAL = "LOCAL"  # CalendarContract.ACCOUNT_TYPE_LOCAL: never synced
+
+
+def syncing_calendar_ids(calendar_rows: list[Row]) -> set[str]:
+    """Ids (as text) of the calendars an account syncs, i.e. not ``LOCAL`` ones."""
+    return {
+        str(row.get("_id"))
+        for row in calendar_rows
+        if row.get("account_type") != ACCOUNT_TYPE_LOCAL
+    }
 
 
 class CalendarStore(Protocol):
@@ -89,6 +102,14 @@ class CalendarStore(Protocol):
 
     def find_event_by_uid(self, uid: str) -> Row | None:
         """Return the ``Events`` row whose ``uid2445`` is ``uid``, or ``None``."""
+        ...
+
+    def dirty_event_ids(self) -> set[int]:
+        """Return ids of events changed on the phone and not yet synced.
+
+        These are ``Events`` rows with ``dirty = 1`` in calendars whose account
+        syncs; ``LOCAL`` calendars never sync, so their events are left out.
+        """
         ...
 
     def insert_event(self, values: Row) -> int:
@@ -151,6 +172,16 @@ class JniCalendarStore:
         """Return the event whose uid2445 matches ``uid``."""
         rows = self._query(self._events_uri, EVENT_COLUMNS, f"{UID_COLUMN} = ?", [uid])
         return rows[0] if rows else None
+
+    def dirty_event_ids(self) -> set[int]:
+        """Return ids of dirty events in calendars that sync."""
+        syncing = syncing_calendar_ids(self.calendars())
+        rows = self._query(self._events_uri, DIRTY_COLUMNS, "dirty = 1")
+        return {
+            int(row["_id"])
+            for row in rows
+            if row.get("_id") is not None and str(row.get("calendar_id")) in syncing
+        }
 
     def insert_event(self, values: Row) -> int:
         """Insert an event and return its id."""

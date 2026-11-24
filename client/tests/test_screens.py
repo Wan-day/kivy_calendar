@@ -893,6 +893,73 @@ def test_queued_delete_returns_to_main_with_a_notice(
     assert "will sync automatically" in main_screen.status_label.text
 
 
+class _PhoneClient(FakeClient):
+    """A service with its own save and delete notices, like the phone's."""
+
+    saved_notice = "Saved on the phone. Android syncs it to your account."
+    deleted_notice = "Deleted on the phone. Android syncs it to your account."
+
+
+def test_service_notice_shows_after_save_and_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A service's own notices replace the queue note, even when queued."""
+    _run_inline(monkeypatch)
+    client = _PhoneClient()
+    client.queued = True
+    manager, main_screen, add_event_screen = _make_screens(client)
+    manager.current = "add_event"
+    add_event_screen.open_for(None)
+    event = add_event_screen._build_event()
+    assert event is not None
+
+    add_event_screen._persist_event(client, event, editing=False)
+
+    assert manager.current == "main"
+    assert main_screen.status_label.text == client.saved_notice
+
+    manager.current = "add_event"
+    add_event_screen.open_for(_sample_event())
+    add_event_screen._delete_event(client, "event-1")
+
+    assert main_screen.status_label.text == client.deleted_notice
+
+
+def test_plain_save_shows_no_notice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a notice or a queue, nothing is announced."""
+    _run_inline(monkeypatch)
+    client = FakeClient()
+    manager, main_screen, add_event_screen = _make_screens(client)
+    manager.current = "add_event"
+    add_event_screen.open_for(None)
+    event = add_event_screen._build_event()
+    assert event is not None
+
+    add_event_screen._persist_event(client, event, editing=False)
+
+    assert "sync" not in main_screen.status_label.text
+
+
+def _card_texts(widget: Any) -> list[str]:
+    """Every label text inside a widget tree."""
+    texts = [widget.text] if hasattr(widget, "text") else []
+    for child in widget.children:
+        texts.extend(_card_texts(child))
+    return texts
+
+
+def test_event_card_tags_events_that_are_not_synced_yet() -> None:
+    """Only queued events get the tag; desktop events look unchanged."""
+    from kivy_calendar.screens.main import EventRow
+
+    event = _sample_event()
+    plain = EventRow(event, lambda _: None)
+    waiting = EventRow(replace(event, queued=True), lambda _: None)
+
+    assert "Not synced yet" not in _card_texts(plain)
+    assert "Not synced yet" in _card_texts(waiting)
+
+
 def test_new_event_keeps_one_id_across_repeated_saves(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

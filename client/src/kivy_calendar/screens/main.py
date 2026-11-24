@@ -182,6 +182,16 @@ class EventRow(ButtonBehavior, BoxLayout):
             meta_box.add_widget(_dot(dot_color))
             meta.add_widget(meta_box)
         meta.add_widget(_text(" · ".join(meta_parts), font_size="12sp", color=MUTED))
+        if event.queued:
+            tag = _text(
+                "Not synced yet",
+                font_name=FONT_SEMIBOLD,
+                font_size="11sp",
+                color=CORAL_DEEP_TEXT,
+                padding=(dp(6), dp(1)),
+            )
+            Paint(tag, CORAL_TINT, radius=6)
+            meta.add_widget(tag)
         meta.add_widget(Widget())
         details.add_widget(meta)
         details.add_widget(Widget())

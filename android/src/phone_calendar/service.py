@@ -7,6 +7,9 @@ client's access gate, so the app can ask for calendar permission first.
 
 from __future__ import annotations
 
+import logging
+import re
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
@@ -22,6 +25,7 @@ from kivy_calendar.models import (
     ServiceError,
     TimeZoneOption,
 )
+from phone_calendar.account_sync import AccountSync, NoAccountSync
 from phone_calendar.permissions import CalendarPermissions
 from phone_calendar.provider import (
     DEFAULT_FUTURE,
@@ -29,6 +33,11 @@ from phone_calendar.provider import (
     AndroidCalendarProvider,
 )
 from slots.service import SlotService
+
+logger = logging.getLogger(__name__)
+
+_MAX_ERROR_LENGTH = 160
+_JVM_PREFIX = "JVM exception occurred: "
 
 
 class PhoneCalendarService:
@@ -41,17 +50,37 @@ class PhoneCalendarService:
     # Read by the event form: repeating occurrences open read-only here.
     edits_repeating_events = False
 
+    # Read by the event form after a save or delete: writes land in the phone's
+    # calendar first and Android syncs them to the account later.
+    saved_notice = "Saved on the phone. Android syncs it to your account."
+    deleted_notice = "Deleted on the phone. Android syncs it to your account."
+
     def __init__(
         self,
         provider: AndroidCalendarProvider,
         permissions: CalendarPermissions,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        account_sync: AccountSync | None = None,
+        sync_timeout: float = 30.0,
+        sync_poll: float = 1.0,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        """Create the service."""
+        """Create the service.
+
+        ``account_sync`` asks Android to sync (default: does nothing);
+        ``sync()`` waits up to ``sync_timeout`` seconds, polling every
+        ``sync_poll``. ``clock`` and ``sleep`` can be replaced in tests.
+        """
         self._provider = provider
         self._permissions = permissions
         self._slots = SlotService(provider)
         self._now = now
+        self._account_sync = account_sync or NoAccountSync()
+        self._sync_timeout = sync_timeout
+        self._sync_poll = sync_poll
+        self._clock = clock
+        self._sleep = sleep
 
     # Access gate -----------------------------------------------------------
 
@@ -75,7 +104,14 @@ class PhoneCalendarService:
         events = _value(
             self._provider.list_events(now - DEFAULT_PAST, now + DEFAULT_FUTURE)
         )
-        return [_client_event(event) for event in events]
+        # Not knowing which events are unsynced must not hide the events.
+        unsynced = self._provider.unsynced_event_ids().value or set()
+        return [
+            _client_event(
+                event, queued=(event.recurring_event_id or event.id) in unsynced
+            )
+            for event in events
+        ]
 
     def list_calendars(self) -> list[CalendarSummary]:
         """Return the calendars events can be written to."""
@@ -127,11 +163,44 @@ class PhoneCalendarService:
         return False
 
     def sync(self) -> int:
-        """Re-read the calendar and return the occurrence count.
+        """Ask Android to sync the calendar accounts, then re-read.
 
-        Asking Android to sync the accounts arrives in 0.4.0.
+        Waits until Android reports the sync finished or the timeout passes
+        (the events are re-read either way). Local calendars never sync.
         """
+        accounts = _value(self._provider.accounts())
+        if accounts:
+            self._sync_accounts(accounts)
         return len(self.list_events())
+
+    def _sync_accounts(self, accounts: list[tuple[str, str]]) -> None:
+        """Request a sync and wait for it.
+
+        A failed request is an error. A failed "still busy?" check only stops
+        the wait, because the request already went out and the list is
+        re-read anyway.
+        """
+        try:
+            self._account_sync.request(accounts)
+        except Exception as error:  # noqa: BLE001 - JNI raises JavaException
+            logger.exception("requesting an Android sync failed")
+            raise ServiceError(
+                "upstream_error",
+                f"Android could not start a sync: {_short_error(error)}",
+            ) from error
+        try:
+            deadline = self._clock() + self._sync_timeout
+            # Android may not report a just-requested sync as pending yet, so
+            # give it one poll before the first "still busy?" check.
+            self._sleep(self._sync_poll)
+            while self._account_sync.busy(accounts) and self._clock() < deadline:
+                self._sleep(self._sync_poll)
+        except Exception as error:  # noqa: BLE001 - JNI raises JavaException
+            logger.warning(
+                "checking the Android sync state failed (%s); not waiting",
+                _short_error(error),
+                exc_info=True,
+            )
 
     def find_free_slots(
         self,
@@ -150,6 +219,18 @@ class PhoneCalendarService:
             )
         )
         return [FreeSlot(start=slot.start, end=slot.end) for slot in slots]
+
+
+def _short_error(error: BaseException) -> str:
+    """One short line for an exception, without JVM prefixes or stack trace."""
+    text = str(error).strip()
+    line = text.splitlines()[0] if text else ""
+    line = line.replace(_JVM_PREFIX, "", 1)
+    line = re.sub(r"\bjava\.lang\.", "", line, count=1)
+    line = " ".join(line.split()) or type(error).__name__
+    if len(line) > _MAX_ERROR_LENGTH:
+        line = line[: _MAX_ERROR_LENGTH - 1].rstrip() + "…"
+    return line
 
 
 def _check[T](result: Result[T]) -> None:
@@ -193,8 +274,11 @@ def _domain_event(event: CalendarEvent) -> Event:
         ) from error
 
 
-def _client_event(event: Event) -> CalendarEvent:
-    """Turn a shared event into the screens' event type."""
+def _client_event(event: Event, queued: bool = False) -> CalendarEvent:
+    """Turn a shared event into the screens' event type.
+
+    ``queued`` marks an event whose change has not reached the account yet.
+    """
     return CalendarEvent(
         id=event.id,
         summary=event.summary,
@@ -208,4 +292,5 @@ def _client_event(event: Event) -> CalendarEvent:
         description=event.description,
         recurrence=list(event.recurrence) if event.recurrence else None,
         extended_properties=dict(event.extended_properties) or None,
+        queued=queued,
     )

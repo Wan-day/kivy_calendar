@@ -65,6 +65,22 @@ class AndroidCalendarProvider:
         calendars.sort(key=lambda calendar: (not calendar.primary, calendar.summary))
         return Result.ok(calendars)
 
+    def accounts(self) -> Result[list[tuple[str, str]]]:
+        """Return the distinct ``(name, type)`` accounts that sync calendars.
+
+        Local calendars (type ``LOCAL``) never sync and are left out.
+        """
+        rows = self._calendar_rows()
+        if rows.error is not None or rows.value is None:
+            return Result.fail(*_error(rows))
+        found: dict[tuple[str, str], None] = {}
+        for row in rows.value:
+            name = row.get("account_name")
+            kind = row.get("account_type")
+            if isinstance(name, str) and isinstance(kind, str) and kind != "LOCAL":
+                found[(name, kind)] = None
+        return Result.ok(list(found))
+
     def list_events(
         self,
         time_min: datetime | None = None,
@@ -98,6 +114,19 @@ class AndroidCalendarProvider:
                 events.append(event)
         events.sort(key=lambda event: (event.start, event.id))
         return Result.ok(events)
+
+    def unsynced_event_ids(self) -> Result[set[str]]:
+        """Return ids of events changed on the phone that no account has yet.
+
+        The ids are Android event ids, which is ``Event.id`` of a single event
+        and ``Event.recurring_event_id`` of an occurrence of a series.
+        """
+        try:
+            return Result.ok(
+                {str(event_id) for event_id in self._store.dirty_event_ids()}
+            )
+        except Exception as error:  # noqa: BLE001 - JNI raises JavaException
+            return _store_failure(error)
 
     def get_event(self, calendar_id: str, event_id: str) -> Result[Event | None]:
         """Return a listed occurrence by id, or ``None`` when it is not listed."""

@@ -5,10 +5,11 @@ the phone's own calendar store (Android `CalendarContract`), with Android's
 account sync carrying changes to Google Calendar: no server, no Google sign-in
 and no credentials in the app.
 
-**Status (0.3.0):** the app asks for calendar access, lists the events of
+**Status (0.4.0):** the app asks for calendar access, lists the events of
 every visible calendar on the phone (30 days back to 180 days ahead), and
 creates, edits, moves and deletes single events. Occurrences of repeating
-events are read-only. Free times come from the phone's events. See
+events are read-only. Free times come from the phone's events. Sync asks
+Android to sync the phone's accounts, and unsynced changes are marked. See
 `ROADMAP.md`.
 
 Decided: minimum Android 8.0 (API 26), sideloaded APK only (no Google Play),
@@ -18,10 +19,10 @@ editing whole recurring series is out of scope for the first release.
 
 | File | Purpose |
 | --- | --- |
-| `buildozer.spec` | APK settings: package `io.github.wanday.kivycalendar`, API 34, min API 26, x86_64 (emulator) for now, `READ_CALENDAR` and `WRITE_CALENDAR` only. The version is read from `kivy_calendar.__version__`. |
+| `buildozer.spec` | APK settings: package `io.github.wanday.kivycalendar`, API 34, min API 26, x86_64 (emulator) for now, `READ_CALENDAR`, `WRITE_CALENDAR` and `READ_SYNC_STATS` (granted at install, no prompt; no internet permission). The version is read from `kivy_calendar.__version__`. |
 | `build.sh` | Copies `client/src/kivy_calendar`, the shared packages from `shared/src` and `src/phone_calendar` into `app/` (generated, git-ignored), then runs Buildozer. Removes old APKs first. |
 | `main.py` | Entry point: imports the shared code once (logged as `[KivyCalendar] shared code imported`), then starts the app. |
-| `src/phone_calendar/` | The phone's calendar as the app's service: `store.py` (reads `Calendars`/`Instances` and writes `Events` rows through pyjnius), `provider.py` (`AndroidCalendarProvider`, the shared `CalendarProvider`), `service.py` (`PhoneCalendarService`, the screens' `CalendarService` plus the access gate), `permissions.py`. |
+| `src/phone_calendar/` | The phone's calendar as the app's service: `store.py` (reads `Calendars`/`Instances` and writes `Events` rows through pyjnius), `provider.py` (`AndroidCalendarProvider`, the shared `CalendarProvider`), `service.py` (`PhoneCalendarService`, the screens' `CalendarService` plus the access gate), `permissions.py`, `account_sync.py` (the Sync button: asks Android to sync each account). |
 | `tests/` | Desktop tests for `phone_calendar` with a fake calendar store (`fakes.py`); part of the normal `pytest` run. |
 | `pyproject.toml` | ruff and mypy settings for `src/` (not a package). |
 | `tools/pkg-config` | Hides this PC's pkg-config packages from Android compiles; without it Kivy picks up the desktop SDL2 headers and the build fails. |
@@ -105,6 +106,21 @@ To install on a phone, add `arm64-v8a` to `android.archs` in `buildozer.spec`
   copy is removed again.
 - Repeating events can only be read; the form opens their occurrences
   read-only.
+
+## Syncing
+
+- The Sync button asks Android to sync each phone account that has
+  calendars (manual and expedited), waits until Android reports it is done or
+  30 seconds pass, then reloads the list. Waiting needs `READ_SYNC_STATS`
+  (a normal permission, granted at install with no prompt). A failure to
+  start the sync shows as a one-line error; a failure to check progress only
+  stops the wait.
+- Calendars with account type `LOCAL` never sync, so they are skipped.
+- "Not synced yet" on an event card means the change is saved on the phone
+  but has not reached the account yet (`Events.dirty`). Android uploads it on
+  its own sync; Sync does it now.
+- The emulator test calendars have no real sync service, so checking the
+  upload to Google needs a test Google account on a device.
 
 ## Known issues
 
