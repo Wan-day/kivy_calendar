@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import date
 from typing import Any
 
+from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.modalview import ModalView
@@ -31,7 +32,7 @@ from kivy_calendar.screens.theme import (
 from kivy_calendar.screens.ui import wrapped_label
 
 WEEKDAYS = ("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
-DAY_SIZE = 40
+DAY_SIZE = dp(40)
 
 
 def month_grid(year: int, month: int) -> list[date | None]:
@@ -69,7 +70,7 @@ class DatePicker(ModalView):
         """Build the card showing ``selected``'s month, or today's."""
         super().__init__(
             size_hint=(None, None),
-            size=(7 * DAY_SIZE + 6 * 4 + 32, 440),
+            size=(7 * DAY_SIZE + dp(6 * 4 + 32), dp(440)),
             background="",
             background_color=CLEAR,
             overlay_color=OVERLAY,
@@ -80,10 +81,10 @@ class DatePicker(ModalView):
         self.on_pick = on_pick
         self.month = (selected or self.today).replace(day=1)
 
-        card = BoxLayout(orientation="vertical", padding=16, spacing=8)
+        card = BoxLayout(orientation="vertical", padding=16, spacing=dp(8))
         Paint(card, SURFACE, radius=20)
 
-        header = BoxLayout(orientation="horizontal", size_hint_y=None, height=44)
+        header = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(44))
         previous = icon_button("chevron_left", fill=CLEAR, border=None)
         previous.bind(on_release=lambda *_: self.show_month(-1))
         following = icon_button("chevron_right", fill=CLEAR, border=None)
@@ -95,19 +96,19 @@ class DatePicker(ModalView):
         header.add_widget(following)
         card.add_widget(header)
 
-        names = GridLayout(cols=7, spacing=4, size_hint_y=None, height=20)
+        names = GridLayout(cols=7, spacing=dp(4), size_hint_y=None, height=dp(20))
         for name in WEEKDAYS:
             label = wrapped_label(text=name, font_size="12sp", color=MUTED)
             label.halign = "center"
             names.add_widget(label)
         card.add_widget(names)
 
-        self.grid = GridLayout(cols=7, spacing=4, size_hint_y=None)
+        self.grid = GridLayout(cols=7, spacing=dp(4), size_hint_y=None)
         self.grid.bind(minimum_height=self.grid.setter("height"))
         card.add_widget(self.grid)
         card.add_widget(Widget())
 
-        footer = BoxLayout(orientation="horizontal", size_hint_y=None, height=44)
+        footer = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(44))
         if allow_clear:
             clear = ghost_button("Clear", color=MUTED)
             clear.bind(on_release=lambda *_: self.pick(None))

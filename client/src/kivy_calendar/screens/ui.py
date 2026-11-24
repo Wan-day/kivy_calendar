@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from kivy.graphics import Color, Line
+from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.uix.textinput import TextInput
@@ -36,7 +37,7 @@ def wrapped_label(text: str = "", **kwargs: Any) -> Label:
 
     def update_text_size(instance: Label, *_: Any) -> None:
         width = instance.width if instance.width > 8 else 8
-        instance.text_size = (width - 8, None)
+        instance.text_size = (width - dp(8), None)
 
     label.bind(size=update_text_size)
     update_text_size(label)
@@ -46,7 +47,7 @@ def wrapped_label(text: str = "", **kwargs: Any) -> Label:
 def caption(text: str, **kwargs: Any) -> Label:
     """Return a small muted label for section and field names."""
     kwargs.setdefault("size_hint_y", None)
-    kwargs.setdefault("height", 20)
+    kwargs.setdefault("height", dp(20))
     return wrapped_label(
         text=text,
         font_name=FONT_SEMIBOLD,
@@ -74,14 +75,14 @@ def plain_input(hint: str = "", **kwargs: Any) -> TextInput:
     )
 
 
-def input_box(*widgets: Any, height: float = 44, **kwargs: Any) -> BoxLayout:
+def input_box(*widgets: Any, height: float = dp(44), **kwargs: Any) -> BoxLayout:
     """Wrap inputs (and an optional icon) in a white rounded field."""
-    kwargs.setdefault("padding", (12, 0))
+    kwargs.setdefault("padding", (dp(12), 0))
     box = BoxLayout(
         orientation="horizontal",
         size_hint_y=None,
         height=height,
-        spacing=8,
+        spacing=dp(8),
         **kwargs,
     )
     Paint(box, SURFACE, radius=12, border=BORDER)
@@ -101,14 +102,16 @@ class Card(BoxLayout):
         self.bind(minimum_height=self.setter("height"))
         Paint(self, SURFACE, radius=16, border=DIVIDER)
 
-    def add_row(self, caption_text: str, widget: Any, height: float = 52) -> BoxLayout:
+    def add_row(
+        self, caption_text: str, widget: Any, height: float = dp(52)
+    ) -> BoxLayout:
         """Add a row with ``caption_text`` on the left and ``widget`` right."""
         row = BoxLayout(
             orientation="horizontal",
             size_hint_y=None,
             height=height,
-            padding=(16, 0, 12, 0),
-            spacing=8,
+            padding=(dp(16), 0, dp(12), 0),
+            spacing=dp(8),
         )
         label = wrapped_label(text=caption_text, font_size="15sp")
         row.add_widget(label)
@@ -117,12 +120,12 @@ class Card(BoxLayout):
             # A thin line above every row but the first.
             with row.canvas.before:
                 Color(*DIVIDER)
-                line = Line(width=1)
+                line = Line(width=dp(1))
 
             def place_line(*_: Any) -> None:
                 # x + width, not ``right``, which can lag in a size callback.
                 top = row.y + row.height
-                line.points = [row.x + 16, top, row.x + row.width, top]
+                line.points = [row.x + dp(16), top, row.x + row.width, top]
 
             row.bind(pos=place_line, size=place_line)
             place_line()
@@ -145,7 +148,7 @@ class StatusBanner(Label):
             size_hint_y=None,
             halign="left",
             valign="middle",
-            padding=(14, 8),
+            padding=(dp(14), dp(8)),
             color=STATUS_TEXT,
             **kwargs,
         )
@@ -164,10 +167,10 @@ class StatusBanner(Label):
 
     def _fit(self, *_: Any) -> None:
         """Wrap to the banner width and grow with the text."""
-        self.text_size = (max(self.width, 40), None)
+        self.text_size = (max(self.width, dp(40)), None)
         if self.collapse and not self.text:
             self.height = 0
             self.opacity = 0
             return
         self.opacity = 1
-        self.height = max(self.texture_size[1], 34)
+        self.height = max(self.texture_size[1], dp(34))

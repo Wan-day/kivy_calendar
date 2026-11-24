@@ -42,4 +42,8 @@ cd "$here"
 if [ "$#" -eq 0 ]; then
     set -- android debug
 fi
+# Keep only the APK this build makes, so bin/ never holds two versions.
+if [ "$1" = "android" ] && { [ "${2:-}" = "debug" ] || [ "${2:-}" = "release" ]; }; then
+    rm -f "$here"/bin/*.apk "$here"/bin/*.aab
+fi
 exec "$buildozer" "$@"

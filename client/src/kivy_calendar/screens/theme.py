@@ -8,6 +8,7 @@ from typing import Any
 
 from kivy.core.text import LabelBase
 from kivy.graphics import Color, InstructionGroup, Line, RoundedRectangle
+from kivy.metrics import dp
 from kivy.properties import BooleanProperty
 from kivy.uix.button import Button
 from kivy.uix.spinner import Spinner, SpinnerOption
@@ -93,13 +94,14 @@ class Paint:
     ) -> None:
         """Draw the shape in ``widget.canvas.before`` and follow its size."""
         self.widget = widget
+        # Radii and the border width are in dp, like every size in the theme.
         self.radius = radius
-        self.border_width = border_width
+        self.border_width = dp(border_width)
         with widget.canvas.before:
             self.fill_color = Color(*fill)
             self.shape = RoundedRectangle()
             self.border_color = Color(*(border or CLEAR))
-            self.outline = Line(width=border_width)
+            self.outline = Line(width=self.border_width)
         widget.bind(pos=self.update, size=self.update)
         # Kivy keeps only weak references to bound methods, so the widget
         # holds on to its paint to keep it following the widget.
@@ -112,8 +114,8 @@ class Paint:
         if self.radius is None:
             return [self.widget.height / 2] * 4
         if isinstance(self.radius, int | float):
-            return [float(self.radius)] * 4
-        return [float(value) for value in self.radius]
+            return [dp(self.radius)] * 4
+        return [dp(value) for value in self.radius]
 
     def update(self, *_: Any) -> None:
         """Move the shape to the widget's current position and size."""
@@ -178,8 +180,12 @@ def draw_icon(
     color: RGBA,
     width: float = 1.6,
 ) -> None:
-    """Add icon ``name`` to ``group`` with its bottom-left corner at x, y."""
+    """Add icon ``name`` to ``group`` with its bottom-left corner at x, y.
+
+    ``size`` is in pixels; ``width`` is the stroke width in dp.
+    """
     scale = size / 24
+    width = dp(width)
 
     def point(px: float, py: float) -> tuple[float, float]:
         return x + px * scale, y + (24 - py) * scale
@@ -232,7 +238,7 @@ class StyledMixin:
         self.icon = icon
         self.icon_side = icon_side
         self.icon_color = icon_color
-        self.icon_size = icon_size
+        self.icon_size = dp(icon_size)
         self._icon_group = InstructionGroup()
         widget.canvas.after.add(self._icon_group)
         widget.bind(
@@ -284,7 +290,7 @@ class StyledMixin:
         # ``right`` and ``center_x`` can still hold their previous values.
         center_x = widget.x + widget.width / 2
         if self.icon_side == "right":
-            x = widget.x + widget.width - size - 8
+            x = widget.x + widget.width - size - dp(8)
         elif widget.text:
             # The left padding reserves the icon's room in the texture.
             x = center_x - widget.texture_size[0] / 2
@@ -325,7 +331,7 @@ class FlatButton(StyledMixin, Button):
             **kwargs,
         )
         if icon and icon_side == "left" and self.text:
-            self.padding = (icon_size + 8, 0, 0, 0)
+            self.padding = (dp(icon_size + 8), 0, 0, 0)
         self._style(
             fill=fill,
             border=border,
@@ -369,7 +375,7 @@ def icon_button(icon: str, **kwargs: Any) -> FlatButton:
         text="",
         icon=icon,
         size_hint=(None, None),
-        size=(44, 44),
+        size=(dp(44), dp(44)),
         **kwargs,
     )
 
@@ -382,16 +388,16 @@ def chip_button(text: str = "", **kwargs: Any) -> FlatButton:
     kwargs.setdefault("radius", None)
     kwargs.setdefault("font_name", FONT)
     kwargs.setdefault("font_size", "13sp")
-    chip = FlatButton(text=text, size_hint=(None, None), height=34, **kwargs)
+    chip = FlatButton(text=text, size_hint=(None, None), height=dp(34), **kwargs)
     fit_width(chip, 28)
     return chip
 
 
 def fit_width(widget: Any, extra: float) -> None:
-    """Keep ``widget`` as wide as its text plus ``extra`` pixels."""
+    """Keep ``widget`` as wide as its text plus ``extra`` dp."""
 
     def update(*_: Any) -> None:
-        widget.width = widget.texture_size[0] + extra
+        widget.width = widget.texture_size[0] + dp(extra)
 
     widget.bind(texture_size=update)
     update()
@@ -440,7 +446,7 @@ class FlatSpinner(StyledMixin, Spinner):
             color=text_color,
             disabled_color=text_color,
             halign=halign,
-            padding=(12, 0, 36 if icon else 12, 0),
+            padding=(dp(12), 0, dp(36) if icon else dp(12), 0),
             shorten=True,
             shorten_from="right",
             **kwargs,
@@ -448,7 +454,7 @@ class FlatSpinner(StyledMixin, Spinner):
 
         def wrap_text(*_: Any) -> None:
             # Keep long names on one line and clear of the chevron.
-            self.text_size = (max(self.width, 10), None)
+            self.text_size = (max(self.width, dp(10)), None)
 
         self.bind(width=wrap_text)
         wrap_text()
@@ -476,7 +482,7 @@ class IconView(Widget):
     ) -> None:
         """Create the icon at a fixed size."""
         kwargs.setdefault("size_hint", (None, None))
-        kwargs.setdefault("size", (icon_size, icon_size))
+        kwargs.setdefault("size", (dp(icon_size), dp(icon_size)))
         super().__init__(**kwargs)
         self.icon = icon
         self.color = color
@@ -498,7 +504,7 @@ class ToggleSwitch(Widget):
     def __init__(self, **kwargs: Any) -> None:
         """Create the switch at its fixed 48x28 size."""
         kwargs.setdefault("size_hint", (None, None))
-        kwargs.setdefault("size", (48, 28))
+        kwargs.setdefault("size", (dp(48), dp(28)))
         super().__init__(**kwargs)
         with self.canvas:
             self._track_color = Color(*BORDER)
@@ -511,10 +517,13 @@ class ToggleSwitch(Widget):
     def _draw(self, *_: Any) -> None:
         self._track.pos = self.pos
         self._track.size = self.size
+        self._track.radius = [self.height / 2]
         self._track_color.rgba = DEEP_SKY if self.active else BORDER
-        knob = self.height - 6
-        x = self.x + self.width - knob - 3 if self.active else self.x + 3
-        self._knob.pos = (x, self.y + 3)
+        inset = dp(3)
+        knob = self.height - 2 * inset
+        x = self.x + self.width - knob - inset if self.active else self.x + inset
+        self._knob.pos = (x, self.y + inset)
+        self._knob.radius = [knob / 2]
         self._knob.size = (knob, knob)
 
     def on_touch_down(self, touch: Any) -> bool:

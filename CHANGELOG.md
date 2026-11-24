@@ -5,6 +5,15 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-24
+
+- Layout sizes scale with screen density: every fixed pixel size in the
+  screens and theme (heights, widths, padding, spacing, corner radii, icon
+  sizes and stroke widths) is in `dp`, so on phones text fits its rows and
+  buttons. Desktop (density 1) looks the same.
+- `android/build.sh` removes old APKs before building, so `android/bin/`
+  holds only the current one.
+
 ## [0.1.0] - 2026-11-24
 
 - The screens talk to a `CalendarService` interface. The HTTP `BackendClient`
