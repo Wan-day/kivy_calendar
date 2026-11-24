@@ -21,9 +21,11 @@ requirements = python3,kivy,pydantic==2.12.3,pydantic-core,annotated-types,typin
 orientation = portrait
 fullscreen = 0
 
-# Calendar access only (no internet). WRITE_CALENDAR is requested together
-# with READ_CALENDAR so saving (0.3.0) does not ask the user a second time.
-android.permissions = READ_CALENDAR, WRITE_CALENDAR
+# Calendar access and no internet. WRITE_CALENDAR is requested together with
+# READ_CALENDAR so saving (0.3.0) does not ask the user a second time.
+# READ_SYNC_STATS lets Sync wait until Android reports the account sync
+# finished; it is a normal permission, granted at install with no prompt.
+android.permissions = READ_CALENDAR, WRITE_CALENDAR, READ_SYNC_STATS
 
 android.api = 34
 android.minapi = 26

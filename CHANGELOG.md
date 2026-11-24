@@ -15,6 +15,8 @@ All notable changes to Kivy Calendar. Versions follow the rules in
   Android syncs it to your account." (or "Deleted on the phone. ...").
 - Event cards whose change has not reached the account yet show a "Not synced
   yet" tag. Calendars that are only on the phone never show it.
+- The APK also requests READ_SYNC_STATS (granted at install, no prompt) so
+  Sync can wait for Android's sync to finish.
 - Desktop is unchanged.
 
 ## [0.3.0] - 2026-11-24
