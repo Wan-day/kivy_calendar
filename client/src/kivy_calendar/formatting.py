@@ -17,8 +17,22 @@ def default_event_times(now: datetime | None = None) -> tuple[datetime, datetime
     own time zone, which makes the helper easy to test.
     """
     current = now if now is not None else datetime.now().astimezone()
-    start = current.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-    return start, start + timedelta(hours=1)
+    tz = current.tzinfo
+    hour = timedelta(hours=1)
+    # Add whole hours in UTC: wall-clock arithmetic on an aware datetime can
+    # land in a DST gap (a wall-clock time that does not exist).
+    start = (
+        current.replace(minute=0, second=0, microsecond=0).astimezone(UTC) + hour
+    ).astimezone(tz)
+    # The form stores wall-clock text, and an ambiguous time (fall-back hour)
+    # maps back to its first occurrence (fold=0).  Keep the window consistent
+    # with that round trip: start after now, end after start.
+    while start.replace(fold=0) <= current:
+        start = (start.astimezone(UTC) + hour).astimezone(tz)
+    end = (start.astimezone(UTC) + hour).astimezone(tz)
+    while end.replace(fold=0) <= start.replace(fold=0):
+        end = (end.astimezone(UTC) + hour).astimezone(tz)
+    return start, end
 
 
 def format_event_when(event: CalendarEvent) -> str:
