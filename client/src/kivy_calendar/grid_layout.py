@@ -1,4 +1,4 @@
-"""Kivy-free layout of events on a week grid.
+"""Kivy-free layout of events on the week and month grids.
 
 The week view shows seven day columns.  This module decides which events go
 into which column, where they start and end (in minutes since midnight) and
@@ -11,6 +11,7 @@ a day always spans 0 to 1440 minutes, even on a daylight-saving change.
 
 from __future__ import annotations
 
+import calendar
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, tzinfo
@@ -162,4 +163,82 @@ def build_week(
             layout.timed[d].append(PlacedEvent(event, d, begin, finish))
     for d in days:
         layout.timed[d] = _assign_lanes(layout.timed[d])
+    return layout
+
+
+@dataclass
+class MonthLayout:
+    """Everything the month grid draws for one month."""
+
+    month: date
+    weeks: list[list[date]]
+    events: dict[date, list[CalendarEvent]] = field(default_factory=dict)
+
+    @property
+    def days(self) -> list[date]:
+        """Return every cell's date, row by row."""
+        return [day for week in self.weeks for day in week]
+
+    @property
+    def is_empty(self) -> bool:
+        """Return whether the shown days have no events at all."""
+        return not any(self.events.values())
+
+
+def month_weeks(day: date) -> list[list[date]]:
+    """Return the weeks (Monday first) covering the month of ``day``.
+
+    The first and last week include days of the neighbouring months, so the
+    result has four to six rows of seven days.
+    """
+    return calendar.Calendar(firstweekday=WEEK_START).monthdatescalendar(
+        day.year, day.month
+    )
+
+
+def month_title(day: date) -> str:
+    """Return the month and year, e.g. ``November 2026``."""
+    return f"{day:%B %Y}"
+
+
+def _covered_days(event: CalendarEvent, tz: tzinfo | None) -> tuple[date, date]:
+    """Return the first and last calendar day ``event`` touches in ``tz``."""
+    if event.all_day:
+        return event.start.date(), all_day_last_day(event)
+    start, end = _wall_span(event, tz)
+    return start.date(), (end - timedelta(microseconds=1)).date()
+
+
+def build_month(
+    events: Sequence[CalendarEvent],
+    day: date,
+    tz: tzinfo | None = None,
+) -> MonthLayout:
+    """Place ``events`` on the month grid containing ``day``.
+
+    Every event is listed on each day it covers, including the leading and
+    trailing days of neighbouring months.  A day's events are sorted all-day
+    first, then by start time and title.
+    """
+    weeks = month_weeks(day)
+    layout = MonthLayout(
+        month=day.replace(day=1),
+        weeks=weeks,
+        events={d: [] for week in weeks for d in week},
+    )
+    first_shown, last_shown = weeks[0][0], weeks[-1][-1]
+    for event in events:
+        first, last = _covered_days(event, tz)
+        current = max(first, first_shown)
+        while current <= min(last, last_shown):
+            layout.events[current].append(event)
+            current += timedelta(days=1)
+    for items in layout.events.values():
+        items.sort(
+            key=lambda e: (
+                not e.all_day,
+                e.start.date() if e.all_day else local_time(e.start, tz),
+                e.summary,
+            )
+        )
     return layout

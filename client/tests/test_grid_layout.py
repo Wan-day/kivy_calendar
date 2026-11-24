@@ -8,7 +8,10 @@ from zoneinfo import ZoneInfo
 from kivy_calendar.api import CalendarEvent
 from kivy_calendar.grid_layout import (
     at_local,
+    build_month,
     build_week,
+    month_title,
+    month_weeks,
     round_down,
     week_days,
     week_title,
@@ -284,3 +287,125 @@ def test_at_local_builds_aware_times_and_round_down_snaps() -> None:
     assert value == datetime(2026, 11, 9, 9, 30, tzinfo=BERLIN)
     assert at_local(date(2026, 7, 1), 60).utcoffset() is not None
     assert [round_down(m) for m in (0, 29, 30, 59, 61)] == [0, 0, 30, 30, 60]
+
+
+def test_month_weeks_include_neighbouring_days() -> None:
+    """November 2026 spans Mon 26 Oct to Sun 6 Dec: six full rows."""
+    weeks = month_weeks(date(2026, 11, 15))
+
+    assert len(weeks) == 6
+    assert all(len(week) == 7 for week in weeks)
+    assert weeks[0][0] == date(2026, 10, 26)
+    assert weeks[-1][-1] == date(2026, 12, 6)
+    assert all(week[0].weekday() == 0 for week in weeks)
+
+
+def test_month_weeks_have_five_rows_when_the_month_fits() -> None:
+    """October 2026 needs only five Monday-first rows."""
+    weeks = month_weeks(date(2026, 10, 1))
+
+    assert len(weeks) == 5
+    assert weeks[0][0] == date(2026, 9, 28)
+    assert weeks[-1][-1] == date(2026, 11, 1)
+
+
+def test_month_title() -> None:
+    """The title is the full month name and the year."""
+    assert month_title(date(2026, 11, 24)) == "November 2026"
+
+
+def test_month_lists_multi_day_and_all_day_events_on_every_day() -> None:
+    """A three-day all-day event and an overnight event fill each day."""
+    holiday = _event(
+        "holiday",
+        datetime(2026, 11, 10, tzinfo=BERLIN),
+        datetime(2026, 11, 13, tzinfo=BERLIN),
+        all_day=True,
+    )
+    night = _event(
+        "night",
+        datetime(2026, 11, 10, 22, tzinfo=BERLIN),
+        datetime(2026, 11, 11, 2, tzinfo=BERLIN),
+    )
+
+    layout = build_month([holiday, night], date(2026, 11, 1), BERLIN)
+
+    def ids(day: int) -> list[str]:
+        return [e.id for e in layout.events[date(2026, 11, day)]]
+
+    assert ids(9) == []
+    assert ids(10) == ["holiday", "night"]
+    assert ids(11) == ["holiday", "night"]
+    assert ids(12) == ["holiday"]
+    assert ids(13) == []
+
+
+def test_month_event_ending_at_midnight_does_not_touch_the_next_day() -> None:
+    """A timed event ending exactly at 00:00 stays on its own day."""
+    evening = _event(
+        "evening",
+        datetime(2026, 11, 10, 20, tzinfo=BERLIN),
+        datetime(2026, 11, 11, 0, tzinfo=BERLIN),
+    )
+
+    layout = build_month([evening], date(2026, 11, 1), BERLIN)
+
+    assert [e.id for e in layout.events[date(2026, 11, 10)]] == ["evening"]
+    assert layout.events[date(2026, 11, 11)] == []
+
+
+def test_month_sorts_all_day_first_then_by_start() -> None:
+    """Within a day, all-day events come first, then timed ones by start."""
+    late = _timed("late", 10, (15, 0), (16, 0))
+    early = _timed("early", 10, (8, 0), (9, 0))
+    all_day = _event(
+        "all-day",
+        datetime(2026, 11, 10, tzinfo=BERLIN),
+        datetime(2026, 11, 11, tzinfo=BERLIN),
+        all_day=True,
+    )
+
+    layout = build_month([late, all_day, early], date(2026, 11, 1), BERLIN)
+
+    assert [e.id for e in layout.events[date(2026, 11, 10)]] == [
+        "all-day",
+        "early",
+        "late",
+    ]
+
+
+def test_month_shows_events_on_neighbouring_month_days_and_skips_others() -> None:
+    """Leading and trailing cells get events; days off the grid are dropped."""
+    leading = _timed("leading", 1, (9, 0), (10, 0))
+    october = _event(
+        "october",
+        datetime(2026, 10, 28, 9, tzinfo=BERLIN),
+        datetime(2026, 10, 28, 10, tzinfo=BERLIN),
+    )
+    far = _event(
+        "far",
+        datetime(2026, 9, 1, 9, tzinfo=BERLIN),
+        datetime(2026, 9, 1, 10, tzinfo=BERLIN),
+    )
+
+    layout = build_month([leading, october, far], date(2026, 11, 1), BERLIN)
+
+    assert [e.id for e in layout.events[date(2026, 10, 28)]] == ["october"]
+    assert "far" not in [e.id for d in layout.events.values() for e in d]
+    assert layout.days[0] == date(2026, 10, 26)
+    assert not layout.is_empty
+
+
+def test_month_converts_times_to_the_grid_zone() -> None:
+    """A late-evening UTC event lands on the next day in Berlin."""
+    event = _event(
+        "utc",
+        datetime(2026, 11, 10, 23, 30, tzinfo=UTC),
+        datetime(2026, 11, 11, 0, 30, tzinfo=UTC),
+    )
+
+    layout = build_month([event], date(2026, 11, 1), BERLIN)
+
+    assert layout.events[date(2026, 11, 10)] == []
+    assert [e.id for e in layout.events[date(2026, 11, 11)]] == ["utc"]
+    assert build_month([], date(2026, 11, 1), BERLIN).is_empty
