@@ -4,7 +4,7 @@ A calendar app to track things easier
 
 ## Status
 
-Version **0.4.0** (see `VERSION`). Changes per version are in
+Version **0.5.0** (see `VERSION`). Changes per version are in
 [CHANGELOG.md](CHANGELOG.md); the plan up to the 1.0.0 Android release is in
 [ROADMAP.md](ROADMAP.md).
 
@@ -13,7 +13,8 @@ Compose deployment, and CI are implemented. A standalone Android build that
 uses the phone's own calendar instead of the backend is in progress: since
 0.3.0 the APK reads the phone's calendars and creates, edits, moves and
 deletes events in them, and since 0.4.0 it syncs the phone's accounts and
-shows which changes are not synced yet (`android/README.md`).
+shows which changes are not synced yet (`android/README.md`). Since 0.5.0
+both builds also have week and month grid views.
 
 ## Layout
 
@@ -32,7 +33,8 @@ shows which changes are not synced yet (`android/README.md`).
   FastAPI app behind bearer-token auth.
 - **Client**: Kivy app (`client/src/kivy_calendar`) in a light-blue theme with
   the bundled Inter font. It has an event list grouped by day (name and date
-  filters, sort, Refresh, Sync) and an add/edit form with calendar and time
+  filters, sort, Refresh, Sync), a Week view and a Month view (switch under
+  the header, tap to open or start an event) and an add/edit form with calendar and time
   zone dropdowns, a month date picker, an hour-and-minute time sheet,
   "Suggest a free time", and delete confirmation. Tap an event to edit or
   delete it.

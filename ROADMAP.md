@@ -132,6 +132,15 @@ device.
 
 Done when: both views work on desktop and Android.
 
+**Shipped in 0.5.0:** a List | Week | Month switcher (List is the default). The
+week view runs Monday to Sunday with an all-day strip, a 24-hour grid opening at
+07:00, side-by-side blocks for overlaps and a current-time line. The month view
+is a Monday-first grid with event chips and "+N", which opens that week. Tapping
+an event opens it; tapping an empty week slot (rounded down to 30 minutes) or a
+month day (09:00) starts a new event there. Both grids use the device's local
+time zone, apply the name filter and hide the date chips and sort; on Android
+they only have the loaded window (30 days back to 180 ahead).
+
 ## 0.6.0: phone polish
 
 - Real phone layouts: no fixed window size, on-screen keyboard never covers

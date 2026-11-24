@@ -5,11 +5,12 @@ the phone's own calendar store (Android `CalendarContract`), with Android's
 account sync carrying changes to Google Calendar: no server, no Google sign-in
 and no credentials in the app.
 
-**Status (0.4.0):** the app asks for calendar access, lists the events of
+**Status (0.5.0):** the app asks for calendar access, lists the events of
 every visible calendar on the phone (30 days back to 180 days ahead), and
 creates, edits, moves and deletes single events. Occurrences of repeating
 events are read-only. Free times come from the phone's events. Sync asks
-Android to sync the phone's accounts, and unsynced changes are marked. See
+Android to sync the phone's accounts, and unsynced changes are marked. A List | Week | Month switcher adds week and
+month grid views. See
 `ROADMAP.md`.
 
 Decided: minimum Android 8.0 (API 26), sideloaded APK only (no Google Play),

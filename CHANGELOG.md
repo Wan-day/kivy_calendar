@@ -5,6 +5,26 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-24
+
+- A List | Week | Month switcher under the header. List stays the default.
+- Week view: Monday to Sunday with previous, next and Today buttons, an
+  all-day strip, and a 24-hour grid that opens at 07:00. Events show in their
+  calendar colours, side by side when they overlap, and a line marks the
+  current time. Tap an event to open it; tap an empty slot to start a new event
+  there (rounded down to 30 minutes).
+- Month view: a Monday-first month grid that also shows days of the
+  neighbouring months, with compact event chips and "+N" when more do not fit.
+  Tapping "+N" opens that week in the week view. Tap a chip to open the event;
+  tap empty space in a day to start a new event that day at 09:00.
+- The week and month views show times in the device's local time zone (the
+  list keeps each event's own zone). The name filter applies; the date chips
+  and sort are hidden there. On Android, only the loaded window (30 days back
+  to 180 days ahead) has events.
+- The event form can open pre-filled at a start time (used by taps on the
+  grids). A tap in a daylight-saving gap moves forward an hour.
+- Works on desktop and Android.
+
 ## [0.4.0] - 2026-11-24
 
 - The Sync button on Android asks Android to sync each phone account that has
