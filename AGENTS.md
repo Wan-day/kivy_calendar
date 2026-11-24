@@ -19,7 +19,7 @@ Both builds share the calendar logic in `shared/` and the screens in `client/`; 
 - shared/src/: code both builds use. `core` (errors, config, SQLite helper), `domain` (models, time zones), `slots` (free-slot search), `calendar_provider` (the provider interface). No FastAPI, Google client or backend imports here.
 - backend/src/: API, Google Calendar provider and OAuth helper, sync, local cache, retry queue. Desktop/self-hosted only.
 - client/src/: Kivy screens, theme and widgets, HTTP client for the backend. No calendar logic here.
-- android/: Android calendar provider, in-process calendar service, `buildozer.spec` (planned).
+- android/: Android build. `buildozer.spec`, `build.sh` (copies client/ and shared/ code into the generated `android/app/`, then runs Buildozer), `main.py` entry point, `tools/pkg-config`. The Android calendar provider and in-process service are planned. See `android/README.md`.
 - tests/: tests for shared/ and backend/, one folder per module; client tests live in client/tests/.
 - docker/: Dockerfile and Compose files for deploying the backend.
 
@@ -85,7 +85,7 @@ Never:
 - Run tests or scripts against a real personal calendar. Use mocks, the fake calendar store, or a dedicated test calendar on an emulator.
 - Make the backend reachable from the public internet or bind it to all interfaces.
 - Push to `main`, force-push, or rewrite history.
-- Edit generated files: `dist/, *.lock, .buildozer/, bin/`. Change the generator instead.
+- Edit generated files: `dist/, *.lock, .buildozer/, bin/, android/app/`. Change the generator instead.
 
 ## More detail, loaded only when needed
 
