@@ -52,12 +52,12 @@ Android build:
 
 ## Versioning
 
-The app version lives in `VERSION` (major.minor.patch, started at 0.0.1) and is repeated in `shared/`, `backend/` and `client/` `pyproject.toml`; a test keeps them equal.
+The app version lives in `VERSION` (major.minor.patch, started at 0.0.1) and is repeated in `shared/`, `backend/` and `client/` `pyproject.toml` and in `__version__` in `client/src/kivy_calendar/__init__.py` (what the app shows); a test keeps them equal.
 
 - 0.0.x (patch): small changes that don't change the app as a whole, e.g. an extra button or a bug fix.
 - 0.x.0 (minor): a new feature, e.g. a new calendar view. Resets the patch number.
 - x.0.0 (major): something big changes, e.g. a whole new provider or a public release. Resets minor and patch.
-- Every PR that changes the app's behavior bumps the version in all four files by the rule above and adds its entry to `CHANGELOG.md` under that version. Docs-, test- or CI-only PRs keep the version and add nothing.
+- Every PR that changes the app's behavior bumps the version in all five places by the rule above and adds its entry to `CHANGELOG.md` under that version. Docs-, test- or CI-only PRs keep the version and add nothing.
 - Planned versions up to 1.0.0 are in `ROADMAP.md`; keep it in step when a version ships or the plan changes.
 
 ## Agent workflow
