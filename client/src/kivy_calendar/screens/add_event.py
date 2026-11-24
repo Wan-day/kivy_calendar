@@ -377,7 +377,7 @@ class AddEventScreen(Screen):
 
     def _on_saved(self, queued: bool = False) -> None:
         """Return to the main screen and refresh the event list."""
-        self._return_to_main(QUEUED_NOTICE if queued else "")
+        self._return_to_main(self._notice("saved_notice", queued))
 
     def _load_time_zones(self) -> None:
         """Fetch the curated time zones for the dropdowns off the UI thread."""
@@ -744,7 +744,18 @@ class AddEventScreen(Screen):
 
     def _on_deleted(self, queued: bool = False) -> None:
         """Return to the main screen and refresh the event list."""
-        self._return_to_main(QUEUED_NOTICE if queued else "")
+        self._return_to_main(self._notice("deleted_notice", queued))
+
+    def _notice(self, name: str, queued: bool) -> str:
+        """The note to show on the main screen after a save or delete.
+
+        A service may offer its own (``saved_notice``/``deleted_notice``),
+        e.g. the phone calendar; otherwise a queued change gets the queue note.
+        """
+        text = getattr(self.client, name, "")
+        if isinstance(text, str) and text:
+            return text
+        return QUEUED_NOTICE if queued else ""
 
     def _return_to_main(self, notice: str = "") -> None:
         """Reset the form and show the refreshed event list.
