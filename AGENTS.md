@@ -32,6 +32,7 @@ All builds:
 - Match the style of the file you are editing over any general preference.
 - Add or update a test for every behavior change.
 - Calendar logic (time zones, recurrence, free-slot finding) lives in shared/ or in a provider, never in the screens.
+- UI sizes: lengths in the screens and theme use Kivy `dp()` and font sizes `sp`, so the layout scales with screen density on phones.
 - Store times with explicit IANA time zone names. Never use naive datetimes.
 - Calendar failures (offline, rate limit, permission denied) must produce an error result, never a crash.
 
