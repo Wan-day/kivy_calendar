@@ -29,9 +29,9 @@ android.permissions = READ_CALENDAR, WRITE_CALENDAR, READ_SYNC_STATS
 
 android.api = 34
 android.minapi = 26
-# x86_64 runs on the emulator. Add arm64-v8a ("arm64-v8a, x86_64") to install
-# on a phone; it roughly doubles build time and APK size.
-android.archs = x86_64
+# arm64-v8a runs on phones, x86_64 on the emulator. One APK holds both, which
+# roughly doubles build time and APK size.
+android.archs = arm64-v8a, x86_64
 android.accept_sdk_license = True
 android.allow_backup = False
 
