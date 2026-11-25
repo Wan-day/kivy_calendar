@@ -424,9 +424,16 @@ class AddEventScreen(Screen):
         self._set_status(REPEATING_NOTE if self.read_only else "")
 
     def _set_fields_editable(self, editable: bool) -> None:
-        """Lock or unlock every input of the form."""
-        self.summary.readonly = not editable
-        self.description.readonly = not editable
+        """Lock or unlock every input of the form.
+
+        On a phone Kivy makes a read-only text field unfocusable for good: it
+        never makes it focusable again when ``readonly`` goes back to False.
+        Without ``is_focusable`` below, opening one repeating event would
+        leave every later Title and Notes field dead (no keyboard).
+        """
+        for field in (self.summary, self.description):
+            field.readonly = not editable
+            field.is_focusable = editable
         for widget in (
             self.calendar,
             self.all_day,
