@@ -35,6 +35,21 @@ def default_time_zone() -> str:
     return DEFAULT_TIME_ZONE
 
 
+DESKTOP_WINDOW_SIZE = (420, 760)
+
+
+def apply_window_size(window: Any = Window, platform_name: str = platform) -> bool:
+    """Give the desktop window a phone-like size; phones keep their screen.
+
+    Return whether the size was set. On Android and iOS the window must use
+    the device's own size, so nothing is forced there.
+    """
+    if platform_name in ("android", "ios"):
+        return False
+    window.size = DESKTOP_WINDOW_SIZE
+    return True
+
+
 class FormTransition(EaseOutSlide):
     """Slide between screens: left into the form, right back out of it.
 
@@ -61,9 +76,7 @@ class KivyCalendarApp(App):
 
     def build(self) -> ScreenManager:
         """Build the screens; ask for calendar access first when it is needed."""
-        if platform not in ("android", "ios"):
-            # A phone-sized window on desktop; phones use their own screen.
-            Window.size = (420, 760)
+        apply_window_size()
         Window.clearcolor = BACKGROUND
         client, configuration_error = build_client()
         screen_manager = ScreenManager(transition=FormTransition())
@@ -85,9 +98,7 @@ class KivyCalendarApp(App):
         self.needs_access = isinstance(client, AccessGate) and not client.has_access()
         if isinstance(client, AccessGate) and self.needs_access:
             screen_manager.add_widget(
-                PermissionScreen(
-                    client, on_granted=self.show_events, name="permission"
-                )
+                PermissionScreen(client, on_granted=self.show_events, name="permission")
             )
             screen_manager.current = "permission"
         return screen_manager
