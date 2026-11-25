@@ -47,6 +47,7 @@ from kivy_calendar.models import (
 )
 from kivy_calendar.screens.date_picker import DatePicker
 from kivy_calendar.screens.month import MonthView
+from kivy_calendar.screens.scroll_effect import SteadyScrollEffect
 from kivy_calendar.screens.theme import (
     BORDER,
     CALENDAR_DOTS,
@@ -387,7 +388,11 @@ class MainScreen(Screen):
             padding=(0, 0, 0, dp(96)),
         )
         self.event_list.bind(minimum_height=self.event_list.setter("height"))
-        scroll_view = ScrollView(bar_width=dp(4), bar_color=(*DEEP_SKY[:3], 0.4))
+        scroll_view = ScrollView(
+            bar_width=dp(4),
+            bar_color=(*DEEP_SKY[:3], 0.4),
+            effect_cls=SteadyScrollEffect,
+        )
         scroll_view.add_widget(self.event_list)
 
         self.content = content = BoxLayout(
