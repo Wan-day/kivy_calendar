@@ -5,6 +5,48 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-25
+
+- A List | Week | Month switcher under the header. List stays the default.
+  The views slide (0.3 s), and the header is the same in all three.
+- The From and To date chips and the sort are in the List view. The plain
+  "N events" count is hidden in every view; errors and notices still show.
+- Week view: Monday to Sunday with previous, next and Today buttons, an
+  all-day strip, and a 24-hour grid that opens at 07:00 (and goes back to
+  07:00 when the week changes). Drag to scroll: the grid follows the finger,
+  stops at 00:00 and 24:00, and does not coast after release. Events show in
+  their calendar colours, side by side when they overlap, with titles that
+  wrap and are cut off rather than shortened with "…". A line marks the current
+  time and is redrawn every minute.
+- Tap an event in the week or month view to open it. Tap an empty week slot to
+  start a new event there (rounded down to 30 minutes). A drag never opens or
+  creates anything.
+- Month view: a Monday-first month grid that also shows days of the
+  neighbouring months, in lighter colours. Day numbers sit at the top, event
+  chips are cut off to fit, and "+N" appears when more do not fit. All weeks
+  fit above the New event button, and Today lines up with the arrows. Tapping
+  "+N" opens that week in the week view. Tap empty space in a day to start a
+  new event that day at 09:00.
+- The week and month views show times in the device's local time zone (the
+  list keeps each event's own zone). The name filter applies. On Android, only
+  the loaded window (30 days back to 180 days ahead) has events.
+- The event form can open pre-filled at a start time (used by taps on the
+  grids). A tap in a daylight-saving gap moves forward an hour.
+- The event form slides in and out (0.3 s, ease-out) and opens at the top.
+  Focus and selection handles are cleared when it closes. Fixed: on phones,
+  the Title and Notes fields could stop taking focus (no keyboard) after a
+  repeating event had been opened read-only.
+- Saving slides back to the list without stalling; the list is redrawn once
+  the slide ends.
+- The list and the event form scroll without bounce and do not run away on
+  slow frames.
+- The New event button's shadow is light blue.
+- The Android APK is built for arm64-v8a phones by default.
+  `APP_ANDROID_ARCHS=x86_64 android/build.sh` builds it for the emulator; one
+  APK with both is not possible yet. Checked on a real phone (Nothing Phone
+  (3a), Android 15) and on the emulator.
+- Works on desktop and Android.
+
 ## [0.4.0] - 2026-11-24
 
 - The Sync button on Android asks Android to sync each phone account that has

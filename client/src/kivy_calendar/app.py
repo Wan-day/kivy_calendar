@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from kivy.app import App
 from kivy.core.window import Window
 from kivy.uix.screenmanager import ScreenManager
@@ -12,6 +14,7 @@ from kivy_calendar.screens.add_event import AddEventScreen
 from kivy_calendar.screens.main import MainScreen
 from kivy_calendar.screens.permission import PermissionScreen
 from kivy_calendar.screens.theme import BACKGROUND
+from kivy_calendar.screens.ui import EaseOutSlide
 from kivy_calendar.service import AccessGate, CalendarService, choose_service
 
 
@@ -32,6 +35,25 @@ def default_time_zone() -> str:
     return DEFAULT_TIME_ZONE
 
 
+class FormTransition(EaseOutSlide):
+    """Slide between screens: left into the form, right back out of it.
+
+    A short slide (0.3 s) that starts fast and settles gently, so it feels
+    smooth on a phone without hiding the next screen for long.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        """Create the transition with the app's duration."""
+        kwargs.setdefault("duration", 0.3)
+        super().__init__(**kwargs)
+
+    def start(self, manager: ScreenManager) -> None:
+        """Pick the direction from the screens, then start sliding."""
+        leaving = getattr(self.screen_out, "name", "")
+        self.direction = "right" if leaving == "add_event" else "left"
+        super().start(manager)
+
+
 class KivyCalendarApp(App):
     """Basic Kivy application hosting the calendar screens."""
 
@@ -44,7 +66,7 @@ class KivyCalendarApp(App):
             Window.size = (420, 760)
         Window.clearcolor = BACKGROUND
         client, configuration_error = build_client()
-        screen_manager = ScreenManager()
+        screen_manager = ScreenManager(transition=FormTransition())
         main_screen = MainScreen(
             name="main",
             client=client,

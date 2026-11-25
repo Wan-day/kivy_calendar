@@ -226,8 +226,9 @@ def test_main_screen_lists_events() -> None:
 
     main_screen._show_events([_sample_event()])
 
+    # A plain count folds away in every view.
     assert len(main_screen.rows) == 1
-    assert main_screen.status_label.text == "1 event"
+    assert main_screen.status_label.text == ""
 
 
 def test_tapping_an_event_opens_the_form_in_edit_mode() -> None:
@@ -560,8 +561,9 @@ def test_main_screen_filters_by_name(
     main_screen.name_filter.text = "Standup"
     _run_inline(monkeypatch)
 
+    # A plain count folds away in every view.
     assert len(main_screen.rows) == 1
-    assert main_screen.status_label.text == "1 event"
+    assert main_screen.status_label.text == ""
 
     main_screen.name_filter.text = "Dentist"
     _run_inline(monkeypatch)
@@ -850,6 +852,8 @@ def test_queued_save_returns_to_main_with_a_notice(
 
     assert manager.current == "main"
     assert "will sync automatically" in main_screen.status_label.text
+    # The list is redrawn once the slide back has ended.
+    manager.transition.stop()
     main_screen._show_events([event])
     assert "will sync automatically" in main_screen.status_label.text
     main_screen._show_events([event])
@@ -870,6 +874,7 @@ def test_queued_save_notice_shows_when_the_event_list_is_empty(
     assert event is not None
 
     add_event_screen._persist_event(client, event, editing=False)
+    manager.transition.stop()
     main_screen._show_events([])
     assert "will sync automatically" in main_screen.status_label.text
     main_screen._show_events([])
@@ -1348,6 +1353,9 @@ def test_screens_work_against_the_in_memory_service(
     add_event_screen.save_event()
 
     assert manager.current == "main"
+    # The list is redrawn once the slide back has ended.
+    assert main_screen.rows == []
+    manager.transition.stop()
     assert [row.event.summary for row in main_screen.rows] == ["Dentist"]
     assert main_screen.rows[0].event.calendar_id == "personal"
 
@@ -1443,6 +1451,34 @@ def test_repeating_occurrences_open_read_only_when_the_service_says_so() -> None
     assert not add_event_screen.start.disabled
     assert not add_event_screen.save_button.disabled
     assert add_event_screen.all_day.opacity == 1
+
+
+def test_text_fields_focus_again_after_a_read_only_repeating_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a phone, a read-only visit must not kill the Title and Notes fields.
+
+    Kivy makes a read-only text field unfocusable on a phone and never undoes
+    it, so after opening one repeating event no field could show the keyboard.
+    """
+    import kivy.uix.textinput as textinput_module
+
+    monkeypatch.setattr(textinput_module, "_is_desktop", False)
+    client = FakeClient()
+    client.edits_repeating_events = False  # type: ignore[attr-defined]
+    _, _, add_event_screen = _make_screens(client)
+    fields = (add_event_screen.summary, add_event_screen.description)
+
+    add_event_screen.open_for(_occurrence())
+    assert not any(field.is_focusable for field in fields)
+
+    for event in (None, _sample_event()):
+        add_event_screen.open_for(event)
+        for field in fields:
+            assert field.is_focusable
+            field.focus = True
+            assert field.focus
+            field.focus = False
 
 
 def test_services_that_edit_occurrences_keep_the_form_editable() -> None:

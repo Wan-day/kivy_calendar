@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -30,6 +30,7 @@ from kivy_calendar.models import (
     ServiceError,
     TimeZoneOption,
 )
+from kivy_calendar.screens.scroll_effect import SteadyScrollEffect
 from kivy_calendar.screens.theme import (
     BACKGROUND,
     CLEAR,
@@ -83,6 +84,16 @@ def _row_spinner(text: str = "", values: list[str] | None = None) -> FlatSpinner
         size_hint=(None, None),
         size=(SPINNER_WIDTH, dp(44)),
     )
+
+
+def _set_values(spinner: Any, values: list[str]) -> None:
+    """Set a spinner's values unless they are unchanged.
+
+    Kivy rebuilds every option widget on each assignment, even of equal values,
+    which is slow for the long time zone list.
+    """
+    if list(spinner.values) != values:
+        spinner.values = values
 
 
 def _right(widget: Any, height: float = 56) -> BoxLayout:
@@ -215,8 +226,14 @@ class AddEventScreen(Screen):
         self._delete_slot = BoxLayout(size_hint_y=None, height=dp(44))
         form.add_widget(self._delete_slot)
 
-        scroll_view = ScrollView(bar_width=dp(4))
-        scroll_view.add_widget(form)
+        self.scroll_view = ScrollView(
+            bar_width=dp(4), effect_cls=SteadyScrollEffect
+        )
+        self._top_trigger = Clock.create_trigger(self._scroll_to_top_when_idle, 0)
+        # Work that would change the form's widgets while it slides in or out
+        # waits here until the slide is over.
+        self._after_slide: list[Callable[[], None]] = []
+        self.scroll_view.add_widget(form)
 
         self.cancel_button = icon_button("back", fill=CLEAR, border=None)
         self.cancel_button.bind(on_press=self.cancel)
@@ -259,13 +276,27 @@ class AddEventScreen(Screen):
         )
         layout.add_widget(header)
         layout.add_widget(status_box)
-        layout.add_widget(scroll_view)
+        layout.add_widget(self.scroll_view)
         self.add_widget(layout)
 
         self.open_for(event)
 
-    def open_for(self, event: CalendarEvent | None) -> None:
-        """Fill the form for creating a new event or editing ``event``."""
+    def open_for(
+        self,
+        event: CalendarEvent | None,
+        *,
+        start: datetime | None = None,
+        all_day: bool = False,
+    ) -> None:
+        """Fill the form for creating a new event or editing ``event``.
+
+        For a new event, ``start`` (an aware datetime) prefills the start in
+        the form's time zone with the usual one-hour length, and ``all_day``
+        makes it an all-day event on that date.  Both are ignored when
+        editing.
+        """
+        self._run_after_slide()
+        self._release_text_inputs()
         self.event = event
         self._new_event_id = uuid4().hex if event is None else ""
         # Services that cannot edit repeating occurrences (the phone calendar)
@@ -279,6 +310,8 @@ class AddEventScreen(Screen):
         if event is None:
             self.title_label.text = "New event"
             self._reset_form()
+            if start is not None:
+                self._prefill_start(start, all_day)
         else:
             self.title_label.text = "Edit event"
             self.all_day.active = event.all_day
@@ -305,19 +338,102 @@ class AddEventScreen(Screen):
         self._show_default_status()
         self._load_calendars()
         self._load_time_zones()
+        # The fields above change the content height; scroll to the top again
+        # once Kivy has laid them out.
+        self._top_trigger()
 
     def on_enter(self, *args: Any) -> None:
         """Clear any message left over from a previous visit."""
         self._show_default_status()
+        self._run_after_slide()
+
+    def on_pre_leave(self, *args: Any) -> None:
+        """Drop focus and handles as soon as the form starts to close."""
+        self._release_text_inputs()
+
+    def on_leave(self, *args: Any) -> None:
+        """Drop focus, selection and selection handles when the form closes."""
+        self._release_text_inputs()
+        self._run_after_slide()
+
+    def _sliding(self) -> bool:
+        """Whether the form is part of a running screen transition."""
+        manager = self.manager
+        if manager is None:
+            return False
+        transition = manager.transition
+        return bool(transition.is_active) and self in (
+            transition.screen_in,
+            transition.screen_out,
+        )
+
+    def _when_slide_ends(self, action: Callable[[], None]) -> None:
+        """Run ``action`` now, or after the form has finished sliding.
+
+        Rebuilding dropdowns or clearing fields while the form moves makes the
+        slide stall, so those changes wait for ``on_enter`` / ``on_leave``.
+        """
+        if self._sliding():
+            self._after_slide.append(action)
+        else:
+            action()
+
+    def _run_after_slide(self) -> None:
+        """Run the changes that were held back during a slide."""
+        pending, self._after_slide = self._after_slide, []
+        for action in pending:
+            action()
+
+    def _release_text_inputs(self) -> None:
+        """Unfocus every text field and remove its selection handles.
+
+        On a phone the handles and the cut/copy/paste bubble live on the
+        Window, not in the form, so they stay on screen over every other view
+        unless they are removed explicitly.
+        """
+        for field in (self.summary, self.description):
+            field.cancel_long_touch_event()
+            field._trigger_show_handles.cancel()
+            field.focus = False
+            field.cancel_selection()
+            field._hide_cut_copy_paste()
+            field._hide_handles()
+        self._scroll_to_top()
+
+    def _scroll_to_top(self) -> None:
+        """Show the top of the form and stop any scrolling in progress.
+
+        The scroll effect owns the position: setting ``scroll_y`` alone leaves
+        its old value and speed running, and they overwrite it a frame later.
+        """
+        scroll = self.scroll_view
+        effect = scroll.effect_y
+        if isinstance(effect, SteadyScrollEffect):
+            effect.halt(scroll.height - scroll.viewport_size[1])
+        scroll.scroll_y = 1.0
+
+    def _scroll_to_top_when_idle(self, *_: Any) -> None:
+        """Re-apply the top position after layout, unless a finger is down."""
+        effect = self.scroll_view.effect_y
+        if effect is not None and effect.is_manual:
+            return
+        self._scroll_to_top()
 
     def _show_default_status(self) -> None:
         """Show the read-only note, or nothing."""
         self._set_status(REPEATING_NOTE if self.read_only else "")
 
     def _set_fields_editable(self, editable: bool) -> None:
-        """Lock or unlock every input of the form."""
-        self.summary.readonly = not editable
-        self.description.readonly = not editable
+        """Lock or unlock every input of the form.
+
+        On a phone Kivy makes a read-only text field unfocusable for good: it
+        never makes it focusable again when ``readonly`` goes back to False.
+        Without ``is_focusable`` below, opening one repeating event would
+        leave every later Title and Notes field dead (no keyboard).
+        """
+        for field in (self.summary, self.description):
+            field.readonly = not editable
+            field.is_focusable = editable
         for widget in (
             self.calendar,
             self.all_day,
@@ -404,9 +520,11 @@ class AddEventScreen(Screen):
     def _on_time_zones_loaded(self, zones: list[TimeZoneOption]) -> None:
         """Offer the backend's zones, keeping the current selection."""
         self._curated_zones = list(zones)
-        self._refresh_time_zone_choices(
-            self._resolved_time_zone(self.start_timezone.text),
-            self._resolved_time_zone(self.end_timezone.text),
+        self._when_slide_ends(
+            lambda: self._refresh_time_zone_choices(
+                self._resolved_time_zone(self.start_timezone.text),
+                self._resolved_time_zone(self.end_timezone.text),
+            )
         )
 
     def _on_time_zones_failed(self, message: str) -> None:
@@ -428,8 +546,8 @@ class AddEventScreen(Screen):
         self._time_zone_names = {option.label: option.name for option in options}
         self._time_zone_labels = {option.name: option.label for option in options}
         values = [option.label for option in options]
-        self.start_timezone.values = values
-        self.end_timezone.values = values
+        _set_values(self.start_timezone, values)
+        _set_values(self.end_timezone, values)
         self.start_timezone.text = self._time_zone_labels.get(start_zone, start_zone)
         self.end_timezone.text = self._time_zone_labels.get(end_zone, end_zone)
 
@@ -458,6 +576,10 @@ class AddEventScreen(Screen):
 
     def _on_calendars_loaded(self, calendars: list[CalendarSummary]) -> None:
         """Fill the dropdown and select the event's calendar."""
+        self._when_slide_ends(lambda: self._apply_calendars(calendars))
+
+    def _apply_calendars(self, calendars: list[CalendarSummary]) -> None:
+        """Fill the calendar dropdown now."""
         self._calendars = list(calendars)
         self._calendar_labels = {}
         self._labels_by_calendar = {}
@@ -469,7 +591,7 @@ class AddEventScreen(Screen):
             self._calendar_labels[label] = calendar.id
             self._labels_by_calendar[calendar.id] = label
             labels.append(label)
-        self.calendar.values = labels
+        _set_values(self.calendar, labels)
         self.calendar.disabled = not labels or self.read_only
         self._select_current_calendar()
 
@@ -767,12 +889,14 @@ class AddEventScreen(Screen):
         self._set_status("")
         self.event = None
         self._new_event_id = ""
-        self._reset_form()
+        self._release_text_inputs()
         manager = self.manager
         if manager is not None:
             manager.current = "main"
             if notice:
                 manager.get_screen("main").set_notice(notice)
+        # Clearing the fields now would blank the form while it slides away.
+        self._when_slide_ends(self._reset_form)
         self.refresh()
 
     def _build_event(self) -> CalendarEvent | None:
@@ -868,6 +992,27 @@ class AddEventScreen(Screen):
         self.start.text = self._wall_clock(start, self.time_zone)
         self.end.text = self._wall_clock(end, self.time_zone)
 
+    def _prefill_start(self, start: datetime, all_day: bool) -> None:
+        """Prefill a new event that begins at ``start`` and lasts one hour."""
+        try:
+            # Go through UTC: same-zone astimezone() would keep a gap time as is.
+            local = start.astimezone(UTC).astimezone(ZoneInfo(self.time_zone))
+        except (ValueError, ZoneInfoNotFoundError):
+            local = start
+        # Add the hour in UTC: wall-clock arithmetic can land in a DST gap.
+        hour = timedelta(hours=1)
+        end = (local.astimezone(UTC) + hour).astimezone(local.tzinfo)
+        # The form stores wall-clock text; keep end after start on round trip.
+        while end.replace(fold=0).replace(tzinfo=None) <= local.replace(
+            tzinfo=None
+        ):
+            end = (end.astimezone(UTC) + hour).astimezone(local.tzinfo)
+        self.start.text = self._wall_clock(local, self.time_zone)
+        self.end.text = self._wall_clock(end, self.time_zone)
+        if all_day:
+            # The all-day switch keeps the date of the start text.
+            self.all_day.active = True
+
     @staticmethod
     def _wall_clock(value: datetime, zone: str) -> str:
         """Return ``value`` as wall-clock text in ``zone``."""
@@ -917,6 +1062,7 @@ class AddEventScreen(Screen):
 
     def cancel(self, *args: Any) -> None:
         """Close the event form."""
+        self._release_text_inputs()
         manager = self.manager
         if manager is not None:
             manager.current = "main"

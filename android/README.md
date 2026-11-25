@@ -5,12 +5,13 @@ the phone's own calendar store (Android `CalendarContract`), with Android's
 account sync carrying changes to Google Calendar: no server, no Google sign-in
 and no credentials in the app.
 
-**Status (0.4.0):** the app asks for calendar access, lists the events of
+**Status (0.5.0):** the app asks for calendar access, lists the events of
 every visible calendar on the phone (30 days back to 180 days ahead), and
 creates, edits, moves and deletes single events. Occurrences of repeating
 events are read-only. Free times come from the phone's events. Sync asks
-Android to sync the phone's accounts, and unsynced changes are marked. See
-`ROADMAP.md`.
+Android to sync the phone's accounts, and unsynced changes are marked. A
+List | Week | Month switcher adds week and month grid views. The build is
+checked on a real phone (arm64) and on the emulator (x86_64). See `ROADMAP.md`.
 
 Decided: minimum Android 8.0 (API 26), sideloaded APK only (no Google Play),
 editing whole recurring series is out of scope for the first release.
@@ -19,7 +20,7 @@ editing whole recurring series is out of scope for the first release.
 
 | File | Purpose |
 | --- | --- |
-| `buildozer.spec` | APK settings: package `io.github.wanday.kivycalendar`, API 34, min API 26, x86_64 (emulator) for now, `READ_CALENDAR`, `WRITE_CALENDAR` and `READ_SYNC_STATS` (granted at install, no prompt; no internet permission). The version is read from `kivy_calendar.__version__`. |
+| `buildozer.spec` | APK settings: package `io.github.wanday.kivycalendar`, API 34, min API 26, arm64-v8a (phones; x86_64 for the emulator, see below), `READ_CALENDAR`, `WRITE_CALENDAR` and `READ_SYNC_STATS` (granted at install, no prompt; no internet permission). The version is read from `kivy_calendar.__version__`. |
 | `build.sh` | Copies `client/src/kivy_calendar`, the shared packages from `shared/src` and `src/phone_calendar` into `app/` (generated, git-ignored), then runs Buildozer. Removes old APKs first. |
 | `main.py` | Entry point: imports the shared code once (logged as `[KivyCalendar] shared code imported`), then starts the app. |
 | `src/phone_calendar/` | The phone's calendar as the app's service: `store.py` (reads `Calendars`/`Instances` and writes `Events` rows through pyjnius), `provider.py` (`AndroidCalendarProvider`, the shared `CalendarProvider`), `service.py` (`PhoneCalendarService`, the screens' `CalendarService` plus the access gate), `permissions.py`, `account_sync.py` (the Sync button: asks Android to sync each account). |
@@ -59,8 +60,9 @@ into `~/.buildozer` and `android/.buildozer/`.
 ## Build, install, run
 
 ```sh
-android/build.sh                       # debug APK -> android/bin/ (old APKs are removed)
-adb install -r android/bin/kivycalendar-*-x86_64-debug.apk
+android/build.sh                       # phone (arm64) debug APK -> android/bin/ (old APKs are removed)
+APP_ANDROID_ARCHS=x86_64 android/build.sh   # the same for the emulator
+adb install -r android/bin/kivycalendar-*-debug.apk
 adb shell monkey -p io.github.wanday.kivycalendar -c android.intent.category.LAUNCHER 1
 adb logcat -s python                   # the app's Python and Kivy log
 ```
@@ -92,8 +94,13 @@ io.github.wanday.kivycalendar android.permission.READ_CALENDAR`.
 The first build takes about an hour on a small machine; later builds reuse the
 cache and take minutes. `android/build.sh android clean` starts over.
 
-To install on a phone, add `arm64-v8a` to `android.archs` in `buildozer.spec`
-(`arm64-v8a, x86_64`); it roughly doubles build time and APK size.
+The default build is for phones (`arm64-v8a`); `APP_ANDROID_ARCHS=x86_64`
+builds for the emulator. Each arch has its own build folder, so switching
+between them does not rebuild the other. One APK with both archs is not
+possible yet: python-for-android 2026.05.09 breaks its pip when it installs
+the Python packages for the second arch. To install on a phone, turn on USB debugging in its
+Developer options, connect it by USB, accept the prompt, and check that
+`adb devices` lists it as `device`.
 
 ## Writing to the phone's calendar
 

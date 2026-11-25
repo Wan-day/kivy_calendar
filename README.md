@@ -4,7 +4,7 @@ A calendar app to track things easier
 
 ## Status
 
-Version **0.4.0** (see `VERSION`). Changes per version are in
+Version **0.5.0** (see `VERSION`). Changes per version are in
 [CHANGELOG.md](CHANGELOG.md); the plan up to the 1.0.0 Android release is in
 [ROADMAP.md](ROADMAP.md).
 
@@ -13,7 +13,8 @@ Compose deployment, and CI are implemented. A standalone Android build that
 uses the phone's own calendar instead of the backend is in progress: since
 0.3.0 the APK reads the phone's calendars and creates, edits, moves and
 deletes events in them, and since 0.4.0 it syncs the phone's accounts and
-shows which changes are not synced yet (`android/README.md`).
+shows which changes are not synced yet (`android/README.md`). Since 0.5.0
+both builds also have week and month grid views.
 
 ## Layout
 
@@ -31,9 +32,11 @@ shows which changes are not synced yet (`android/README.md`).
   free-slot search, OAuth credential helper, a write-through sync service, and a
   FastAPI app behind bearer-token auth.
 - **Client**: Kivy app (`client/src/kivy_calendar`) in a light-blue theme with
-  the bundled Inter font. It has an event list grouped by day (name and date
-  filters, sort, Refresh, Sync) and an add/edit form with calendar and time
-  zone dropdowns, a month date picker, an hour-and-minute time sheet,
+  the bundled Inter font. It has an event list grouped by day (name filter,
+  From and To date chips, sort, Refresh, Sync), a Week view and a Month view
+  (switch under the header, tap to open or start an event) and an add/edit form
+  with calendar and time zone dropdowns, a month date picker, an
+  hour-and-minute time sheet,
   "Suggest a free time", and delete confirmation. Tap an event to edit or
   delete it.
 - **Deployment**: Docker Compose file for the backend (`docker/`).
@@ -147,9 +150,10 @@ message instead of the event list.
 
 The main screen's **Refresh** (circular arrow) reloads the backend's cache.
 **Sync** (down arrow) asks the backend to rebuild its cache from Google first.
-Events are grouped under day headings; an event in progress is tinted and
-marked **Now**. The **From** and **To** chips open a month picker, with
-**Clear** to remove the date.
+In the List view, events are grouped under day headings; an event in progress
+is tinted and marked **Now**. The **From** and **To** chips, which only appear
+in the List view, open a month picker, with **Clear** to remove the date.
+The **List**, **Week** and **Month** switch sits under the header.
 
 In the event form, the calendar and time zone dropdowns are filled from the
 backend. The time zones come from `GET /timezones`. **Starts** and **Ends** each
