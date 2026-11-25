@@ -10,9 +10,10 @@ from kivy.metrics import dp
 
 # A frame longer than this counts as this long while the view coasts, so one
 # stalled frame on a slow phone cannot throw the content across its height.
-MAX_COAST_FRAME = 0.05
-# The fastest fling a release may start, in pixels per second.
-MAX_FLING = dp(2000)
+MAX_COAST_FRAME = 0.1
+# The fastest fling a release may start, in pixels per second (a very hard
+# swipe on a phone is under 8000 dp/s; this only stops a corrupt sample).
+MAX_FLING = dp(10000)
 
 
 class SteadyScrollEffect(ScrollEffect):
