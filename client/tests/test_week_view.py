@@ -26,7 +26,6 @@ from kivy_calendar.screens.week import (  # noqa: E402
     HOUR_HEIGHT,
     TAP_SLOP,
     TOP_INSET,
-    FollowEffect,
     WeekView,
 )
 
@@ -147,7 +146,7 @@ def test_tapping_a_block_opens_the_event() -> None:
     event = _event("standup", 11, 9, 10)
     view, recorder = _week(event)
 
-    view.blocks[0].dispatch("on_release")
+    view.grid.activate(*_centre(view, view.blocks[0]))
 
     assert recorder.opened == [event]
     assert recorder.new_starts == []
@@ -189,31 +188,6 @@ def test_tapping_the_hour_labels_does_nothing() -> None:
 
     assert not grid.tap(grid.x + GUTTER / 2, grid.y_of(5 * 60))
     assert recorder.new_starts == []
-
-
-def test_touch_on_empty_space_is_a_tap_but_a_drag_is_not() -> None:
-    """A real touch down and up in place counts; a long drag does not."""
-    from types import SimpleNamespace
-
-    view, recorder = _week()
-    grid = view.grid
-    x = grid.x + GUTTER + 0.5 * grid.column_width
-    y = grid.y_of(8 * 60) - 5
-
-    def touch(py: float) -> Any:
-        return SimpleNamespace(pos=(x, py), opos=(x, py), x=x, y=py)
-
-    still = touch(y)
-    grid.on_touch_down(still)
-    grid.on_touch_up(still)
-    assert recorder.new_starts == [datetime(2026, 11, 9, 8, 0, tzinfo=BERLIN)]
-
-    moved = touch(y)
-    grid.on_touch_down(moved)
-    moved.y = y - dp(80)
-    moved.pos = (x, moved.y)
-    grid.on_touch_up(moved)
-    assert len(recorder.new_starts) == 1
 
 
 def test_today_is_highlighted_and_marked_with_a_time_line() -> None:
@@ -265,37 +239,6 @@ def test_titles_wrap_in_the_block_and_clip_without_an_ellipsis() -> None:
     assert block.font_size <= dp(11)
 
 
-def test_scroll_view_does_not_bounce_and_hides_its_bar() -> None:
-    """No overscroll effect, no bar over the Sunday column, no dead zone."""
-    view, _ = _week()
-
-    assert type(view.scroll.effect_y) is FollowEffect
-    assert view.scroll.bar_width == 0
-    assert view.scroll.effect_y.drag_threshold == 0
-    assert view.scroll.scroll_timeout >= 150
-
-
-def test_scroll_is_clamped_and_reset_when_the_week_changes() -> None:
-    """A wild scroll value is pulled back; changing weeks returns to 07:00."""
-    view, _ = _week()
-
-    view.scroll.scroll_y = 7.5
-    assert view.scroll.scroll_y == 1
-    view.scroll.scroll_y = -3
-    assert view.scroll.scroll_y == 0
-
-    spare = view.grid.height - view.scroll.height
-    for change in (
-        lambda: view.shift_week(1),
-        lambda: view.shift_week(-1),
-        view.go_today,
-        lambda: view.show_week(date(2026, 12, 1)),
-    ):
-        view.scroll.scroll_y = 0
-        change()
-        assert (1 - view.scroll.scroll_y) * spare == pytest.approx(7 * HOUR_HEIGHT)
-
-
 def test_nav_row_items_share_height_and_centre() -> None:
     """Today is as tall as the arrows and all sit on the row's middle."""
     view, _ = _week()
@@ -330,11 +273,11 @@ class _Touch(MotionEvent):
         super().depack(args)
 
 
-def _touch(x: float, y: float, grab: Any = None) -> Any:
+def _touch(x: float, y: float) -> Any:
     """Return a real touch at a window point."""
     touch = _Touch("test", 1, {"x": x, "y": y})
     touch.scale_for_screen(WINDOW, WINDOW)
-    touch.grab_current = grab
+    touch.grab_current = None
     return touch
 
 
@@ -344,382 +287,283 @@ def _move(touch: Any, x: float, y: float) -> None:
     touch.scale_for_screen(WINDOW, WINDOW)
 
 
-def _quick_tap(view: WeekView, x: float, y: float, *, replay: bool = False) -> None:
-    """Send down and up at once, as Kivy does to the grid.
+def _send(view: WeekView, touch: Any, name: str) -> None:
+    """Dispatch an event as the Window does: plain pass, then the grabbers."""
+    touch.grab_current = None
+    getattr(view.viewport, name)(touch)
+    for ref in list(touch.grab_list):
+        widget = ref()
+        if widget is not None:
+            touch.grab_current = widget
+            getattr(widget, name)(touch)
+    touch.grab_current = None
 
-    With ``replay`` it mimics ScrollView: the up reaches the grid with no
-    grabber, then again with the pressed child as ``grab_current``, and that
-    child (which grabbed the touch) gets its own release in the grab pass.
+
+def _swipe(view: WeekView, points: list[tuple[float, float]]) -> Any:
+    """Touch down at the first point, move through the rest, release at the last.
+
+    A single point goes down and up in place.  The release is sent at the last
+    point, so ``[start, end]`` is a swipe whose only move is the release.
     """
-    grid = view.grid
-    touch = _touch(x, y)
-    grid.on_touch_down(touch)
-    if not replay:
-        grid.on_touch_up(touch)
-        return
-    block = next((b for b in view.blocks if b.collide_point(x, y)), None)
-    if block is not None:
-        touch.grab_current = block
-        block.on_touch_down(touch)
-        touch.grab_current = None
-    grid.on_touch_up(touch)
-    if block is not None:
-        touch.grab_current = block
-        grid.on_touch_up(touch)
-        touch.grab_current = None
-
-
-@pytest.mark.parametrize("replay", [False, True])
-def test_quick_tap_on_a_block_opens_only_the_event(replay: bool) -> None:
-    """A tap on a block never also asks for a new event."""
-    event = _event("standup", 11, 9, 10)
-    view, recorder = _week(event)
-    x, y = _centre(view, view.blocks[0])
-
-    _quick_tap(view, x, y, replay=replay)
-
-    assert recorder.new_starts == []
-    assert recorder.opened == ([event] if replay else [])
-
-
-def _settle(view: WeekView, scroll_y: float) -> None:
-    """Scroll to ``scroll_y`` and let Kivy lay the viewport out."""
-    from kivy.clock import Clock
-
-    Clock.tick()
-    view.scroll.scroll_y = scroll_y
-    Clock.tick()
-
-
-def _through_scroll_view(view: WeekView, x: float, y: float) -> None:
-    """Quick-tap the window point (x, y) via the real ScrollView.
-
-    ScrollView holds the touch, replays it to the grid on release and ends it
-    0.2 s later with the grabbing child as ``grab_current``.
-    """
-    import time
-
-    from kivy.clock import Clock
-
-    touch = _touch(x, y)
-    scroll = view.scroll
-    scroll.on_touch_down(touch)
-    scroll.on_touch_up(touch)
-    time.sleep(0.25)
-    Clock.tick()
-    Clock.tick()
-
-
-def test_quick_tap_on_a_block_through_the_real_scroll_view() -> None:
-    """Through ScrollView's delayed replay the event opens once, no new one."""
-    event = _event("standup", 11, 9, 10)
-    view, recorder = _week(event)
-    _settle(view, 0.5)
-    centres = [b.to_window(*b.center) for b in view.blocks]
-    x, y = next(c for c in centres if view.scroll.collide_point(*c))
-
-    _through_scroll_view(view, x, y)
-
-    assert recorder.new_starts == []
-    assert recorder.opened == [event]
-
-
-def test_quick_tap_on_empty_space_through_the_real_scroll_view() -> None:
-    """The same path on empty space creates exactly one event."""
-    view, recorder = _week(_event("standup", 11, 9, 10))
-    _settle(view, 0.5)
-    grid = view.grid
-    x = view.scroll.x + GUTTER + 6.5 * grid.column_width
-
-    _through_scroll_view(view, x, view.scroll.center_y)
-
-    assert recorder.opened == []
-    assert len(recorder.new_starts) == 1
-
-
-@pytest.mark.parametrize("replay", [False, True])
-def test_quick_tap_on_empty_space_asks_for_a_new_event_only(replay: bool) -> None:
-    """A tap away from every block creates, and never opens."""
-    view, recorder = _week(_event("standup", 11, 9, 10))
-    grid = view.grid
-    x = grid.x + GUTTER + 0.5 * grid.column_width
-    y = grid.y_of(15 * 60) - 5
-
-    _quick_tap(view, x, y, replay=replay)
-
-    assert recorder.opened == []
-    assert recorder.new_starts == [datetime(2026, 11, 9, 15, 0, tzinfo=BERLIN)]
-    # A later replay with another grabber must not add a second one.
-    other = _touch(x, y, grab=object())
-    view.grid.on_touch_up(other)
-    assert len(recorder.new_starts) == 1
-
-
-def test_a_drag_that_starts_on_a_block_does_nothing() -> None:
-    """Scrolling by dragging over a block neither opens nor creates."""
-    view, recorder = _week(_event("standup", 11, 9, 10))
-    grid = view.grid
-    x, y = _centre(view, view.blocks[0])
-    touch = _touch(x, y)
-
-    grid.on_touch_down(touch)
-    _move(touch, x, y - dp(60))
-    grid.on_touch_up(touch)
-
-    assert recorder.opened == []
-    assert recorder.new_starts == []
-
-
-def test_a_tap_ending_on_a_block_after_starting_in_the_clear_is_no_new_event() -> None:
-    """Even a tiny slide onto a block does not create at that slot."""
-    view, recorder = _week(_event("standup", 11, 9, 10))
-    grid = view.grid
-    block = view.blocks[0]
-    x = block.x + block.width / 2
-    start = _touch(x, block.top + 2)
-
-    grid.on_touch_down(start)
-    _move(start, x, block.top - 2)
-    grid.on_touch_up(start)
-
-    assert recorder.new_starts == []
-
-
-def _gesture(
-    view: WeekView,
-    points: list[tuple[float, float]],
-    *,
-    pause: float = 0.0,
-    wait: float = 0.0,
-    merged: bool = False,
-) -> Any:
-    """Swipe through ``points`` on the real ScrollView, as the Window does.
-
-    Every move goes first to the ScrollView as a plain touch and then, with
-    ``grab_current`` set, to each widget that grabbed the touch.  ``pause`` is
-    the real time between moves, ``wait`` a hold before the first move, and
-    ``merged`` mimics a slow phone that merges down, moves and up into a
-    single frame: the touch already sits at its last point when it goes down.
-    """
-    import time
-
-    from kivy.clock import Clock
-
-    scroll = view.scroll
     touch = _touch(*points[0])
-
-    def send(name: str) -> None:
-        touch.grab_current = None
-        getattr(scroll, name)(touch)
-        for ref in list(touch.grab_list):
-            widget = ref()
-            if widget is not None:
-                touch.grab_current = widget
-                getattr(widget, name)(touch)
-        touch.grab_current = None
-
-    if merged:
-        _move(touch, *points[-1])
-    scroll.on_touch_down(touch)
-    if wait:
-        for _ in range(4):
-            time.sleep(wait / 4)
-            Clock.tick()
-    if not merged:
-        for point in points[1:]:
-            if pause:
-                time.sleep(pause)
-            Clock.tick()
-            _move(touch, *point)
-            send("on_touch_move")
-    send("on_touch_up")
-    time.sleep(0.25)
-    Clock.tick()
-    Clock.tick()
+    _send(view, touch, "on_touch_down")
+    for point in points[1:-1]:
+        _move(touch, *point)
+        _send(view, touch, "on_touch_move")
+    _move(touch, *points[-1])
+    _send(view, touch, "on_touch_up")
     return touch
 
 
+def _settled(view: WeekView) -> WeekView:
+    """Let Kivy lay the view out, then show 07:00 at the top."""
+    from kivy.clock import Clock
+
+    Clock.tick()
+    view.scroll_to_hour()
+    return view
+
+
 def _on_block(view: WeekView) -> tuple[float, float]:
-    """Return a window point on the first block, with the grid at mid-scroll."""
-    _settle(view, 0.5)
-    centres = [b.to_window(*b.center) for b in view.blocks]
-    return next(c for c in centres if view.scroll.collide_point(*c))
+    """Return a window point on the first block, inside the viewport."""
+    _settled(view)
+    return _centre(view, view.blocks[0])
 
 
 def _on_empty(view: WeekView) -> tuple[float, float]:
-    """Return a window point on empty grid space, with the grid at mid-scroll."""
-    _settle(view, 0.5)
-    x = view.scroll.x + GUTTER + 6.5 * view.grid.column_width
-    return x, view.scroll.center_y
+    """Return a window point on empty grid space, inside the viewport."""
+    _settled(view)
+    viewport = view.viewport
+    return viewport.x + GUTTER + 6.5 * view.grid.column_width, viewport.center_y
+
+
+def test_quick_tap_on_a_block_opens_the_event_once() -> None:
+    """A tap on a block opens it, and never also creates an event."""
+    event = _event("standup", 11, 9, 10)
+    view, recorder = _week(event)
+    x, y = _on_block(view)
+
+    _swipe(view, [(x, y)])
+
+    assert recorder.opened == [event]
+    assert recorder.new_starts == []
+
+
+def test_quick_tap_on_empty_space_creates_once_at_the_rounded_time() -> None:
+    """A tap on a free slot asks for exactly one new event."""
+    view, recorder = _week(_event("standup", 11, 9, 10))
+    _settled(view)
+    grid = view.grid
+    x = grid.x + GUTTER + 0.5 * grid.column_width
+    y = grid.y_of(15 * 60 + 20)
+
+    _swipe(view, [(x, y)])
+
+    assert recorder.opened == []
+    assert recorder.new_starts == [datetime(2026, 11, 9, 15, 0, tzinfo=BERLIN)]
+
+
+def test_a_touch_outside_the_viewport_is_ignored() -> None:
+    """Touches on the header are not the viewport's."""
+    view, recorder = _week()
+    _settled(view)
+    touch = _touch(view.viewport.x + 5, view.viewport.top + dp(20))
+
+    assert not view.viewport.on_touch_down(touch)
+    assert recorder.new_starts == []
 
 
 @pytest.mark.parametrize("on_block", [True, False])
 @pytest.mark.parametrize(
     "shape",
-    ["fast few moves", "merged into one frame", "held then moved", "handed over"],
+    ["fast single move", "up far from down", "short 150 px", "slow drag"],
 )
 def test_a_swipe_never_opens_anything(shape: str, on_block: bool) -> None:
-    """Whatever ScrollView decides, travel past the tap slop is never a tap."""
+    """Any travel past the tap slop is a drag, never a tap."""
     event = _event("standup", 11, 9, 10)
     view, recorder = _week(event)
     x, y = _on_block(view) if on_block else _on_empty(view)
-    if shape == "handed over":
-        view.scroll.scroll_timeout = 30
-    path = [(x, y), (x, y + dp(40)), (x, y + dp(90))]
+    paths = {
+        "fast single move": [(x, y), (x, y + dp(40)), (x, y + dp(90))],
+        "up far from down": [(x, y), (x, y + dp(120))],
+        "short 150 px": [(x, y), (x, y + 150)],
+        "slow drag": [(x, y + step * dp(5)) for step in range(40)],
+    }
 
-    if shape == "fast few moves":
-        _gesture(view, path)
-    elif shape == "merged into one frame":
-        _gesture(view, path, merged=True)
-    elif shape == "held then moved":
-        _gesture(view, path, wait=view.scroll.scroll_timeout / 1000 + 0.1)
-    else:
-        _gesture(view, path, wait=0.2)
+    _swipe(view, paths[shape])
 
     assert recorder.opened == []
     assert recorder.new_starts == []
 
 
-def test_a_merged_swipe_still_scrolls() -> None:
-    """A swipe whose moves arrive with the release moves the grid."""
-    view, _ = _week(_event("standup", 11, 9, 10))
-    x, y = _on_empty(view)
-    before = view.scroll.scroll_y
+def test_a_drag_that_comes_back_to_the_start_is_still_no_tap() -> None:
+    """Once past the slop the gesture is a drag for good."""
+    view, recorder = _week(_event("standup", 11, 9, 10))
+    x, y = _on_block(view)
 
-    _gesture(view, [(x, y), (x, y + dp(120))], merged=True)
+    _swipe(view, [(x, y), (x, y + dp(60)), (x, y)])
 
-    assert view.scroll.scroll_y < before
-
-
-def test_scroll_settings_favour_both_taps_and_swipes() -> None:
-    """Scrolling starts below the tap slop, and a slow first move still counts."""
-    view, _ = _week()
-
-    assert view.scroll.scroll_distance < TAP_SLOP
-    assert view.scroll.scroll_timeout >= 500
+    assert recorder.opened == []
+    assert recorder.new_starts == []
 
 
-def _grid_top(view: WeekView) -> float:
-    """Return how many pixels of the grid are scrolled off the top."""
-    return (1 - view.scroll.scroll_y) * (view.grid.height - view.scroll.height)
+def test_a_small_wobble_inside_the_slop_is_still_a_tap() -> None:
+    """Finger jitter below the slop does not turn a tap into a drag."""
+    event = _event("standup", 11, 9, 10)
+    view, recorder = _week(event)
+    x, y = _on_block(view)
+    before = view.viewport.offset
+
+    _swipe(view, [(x, y), (x + dp(3), y + dp(4)), (x + dp(2), y + dp(3))])
+
+    assert recorder.opened == [event]
+    assert view.viewport.offset == before
 
 
-@pytest.mark.parametrize("pause", [0.0, 0.02, 0.12])
+@pytest.mark.parametrize("pause", [0.0, 0.02])
 def test_a_drag_moves_the_grid_exactly_with_the_finger(pause: float) -> None:
-    """Every move scrolls by the finger's own travel, from the first pixel."""
+    """The grid sits at start offset plus the finger's travel, from the slop on."""
     import time
 
-    from kivy.clock import Clock
-
     view, _ = _week()
-    _settle(view, 0.5)
-    scroll = view.scroll
-    x, y = scroll.center_x, scroll.y + dp(50)
+    _settled(view)
+    viewport = view.viewport
+    x, y = viewport.center_x, viewport.center_y
     touch = _touch(x, y)
-    scroll.on_touch_down(touch)
-    start = _grid_top(view)
+    _send(view, touch, "on_touch_down")
+    start = viewport.offset
 
     for step in range(1, 11):
         time.sleep(pause)
-        Clock.tick()
-        _move(touch, x, y + step * dp(30))
-        touch.grab_current = None
-        scroll.on_touch_move(touch)
-        touch.grab_current = scroll
-        scroll.on_touch_move(touch)
-        touch.grab_current = None
-        assert _grid_top(view) == pytest.approx(start + step * dp(30), abs=0.5)
+        _move(touch, x, y + step * dp(12))
+        _send(view, touch, "on_touch_move")
+        if step * dp(12) > TAP_SLOP:
+            assert viewport.offset == pytest.approx(start + step * dp(12), abs=0.05)
+    _send(view, touch, "on_touch_up")
+
+    assert viewport.offset == pytest.approx(start + 10 * dp(12), abs=0.05)
+    assert view.grid.top == pytest.approx(viewport.top + viewport.offset)
 
 
-def test_a_drag_that_pauses_before_moving_still_scrolls() -> None:
-    """A finger resting longer than a short timeout does not lose the drag."""
+def test_a_swipe_whose_moves_arrive_with_the_release_still_scrolls() -> None:
+    """A release far from the press moves the grid by the whole travel."""
     view, _ = _week()
-    x, y = _on_empty(view)
-    before = _grid_top(view)
+    _settled(view)
+    before = view.viewport.offset
+    x, y = view.viewport.center
 
-    _gesture(view, [(x, y), (x, y + dp(100))], wait=0.45)
+    _swipe(view, [(x, y), (x, y - dp(120))])
 
-    assert _grid_top(view) > before + dp(60)
+    assert view.viewport.offset == pytest.approx(before - dp(120), abs=0.05)
 
 
-@pytest.mark.parametrize("towards_bottom", [True, False])
-@pytest.mark.parametrize("frame", [0.017, 0.1, 0.5, 1.0])
-def test_a_drag_past_either_end_stays_there_however_slow_the_frames(
-    towards_bottom: bool, frame: float
-) -> None:
-    """Pushing past 24:00 or 00:00 stops there; a long frame cannot flip it."""
-    from kivy.clock import Clock
-
+@pytest.mark.parametrize("towards_top", [True, False])
+def test_dragging_past_either_end_stays_at_the_end(towards_top: bool) -> None:
+    """The grid never leaves 00:00 at the top or 24:00 at the bottom."""
     view, _ = _week()
-    _settle(view, 0.1 if towards_bottom else 0.9)
-    scroll = view.scroll
-    x, y = scroll.center_x, scroll.center_y
-    sign = 1 if towards_bottom else -1
+    _settled(view)
+    viewport = view.viewport
+    x, y = viewport.center
+    sign = 1 if towards_top else -1
     touch = _touch(x, y)
-    scroll.on_touch_down(touch)
-    for step in range(1, 25):
+    _send(view, touch, "on_touch_down")
+
+    for step in range(1, 60):
         _move(touch, x, y + sign * step * dp(40))
-        touch.grab_current = scroll
-        scroll.on_touch_move(touch)
-        touch.grab_current = None
-        Clock.tick()
-    touch.grab_current = None
-    scroll.on_touch_up(touch)
-    end = 0.0 if towards_bottom else 1.0
-    assert scroll.scroll_y == pytest.approx(end)
+        _send(view, touch, "on_touch_move")
+    _send(view, touch, "on_touch_up")
 
-    effect = scroll.effect_y
-    for _ in range(40):
-        effect.update_velocity(frame)
-        assert scroll.scroll_y == pytest.approx(end)
-    assert abs(effect.velocity) <= 2000 * dp(1)
+    assert viewport.offset == pytest.approx(viewport.max_offset if towards_top else 0)
+    if towards_top:
+        assert view.grid.y == pytest.approx(viewport.y)
+    else:
+        assert view.grid.top == pytest.approx(viewport.top)
 
 
-def test_the_release_speed_is_sane_after_pushing_against_an_end() -> None:
-    """The fling speed is measured over the real drag, not a few microseconds."""
+def test_a_grid_shorter_than_the_viewport_is_pinned_to_the_top() -> None:
+    """With nothing to scroll the grid stays at the top."""
     view, _ = _week()
-    _settle(view, 0.1)
-    scroll = view.scroll
-    x, y = scroll.center_x, scroll.center_y
-    touch = _touch(x, y)
-    scroll.on_touch_down(touch)
-    for step in range(1, 30):
-        _move(touch, x, y + step * dp(40))
-        touch.grab_current = scroll
-        scroll.on_touch_move(touch)
-        touch.grab_current = None
-    scroll.on_touch_up(touch)
+    _settled(view)
 
-    assert abs(scroll.effect_y.velocity) <= 2000 * dp(1)
+    view.viewport.height = view.grid.height + dp(100)
+    view.viewport.set_offset(dp(200))
+
+    assert view.viewport.offset == 0
+    assert view.grid.top == pytest.approx(view.viewport.top)
 
 
-def test_a_nan_scroll_value_does_not_throw_the_grid_to_the_top() -> None:
-    """A broken value keeps the position the grid had."""
+def test_a_nan_offset_keeps_the_position() -> None:
+    """A broken value does not throw the grid anywhere."""
     view, _ = _week()
-    _settle(view, 0.25)
+    _settled(view)
+    view.viewport.set_offset(dp(100))
 
-    view.scroll.scroll_y = float("nan")
+    view.viewport.set_offset(float("nan"))
 
-    assert view.scroll.scroll_y == pytest.approx(0.25)
+    assert view.viewport.offset == pytest.approx(dp(100))
 
 
-def test_changing_week_while_the_grid_still_coasts_returns_to_seven() -> None:
-    """A fling in progress is stopped, and does not drag the grid off 07:00."""
-    from kivy.clock import Clock
-
+def test_scroll_is_clamped_and_reset_when_the_week_changes() -> None:
+    """A wild offset is pulled back; changing weeks returns to 07:00."""
     view, _ = _week()
-    _settle(view, 0.5)
-    effect = view.scroll.effect_y
-    effect.velocity = 1500
-    effect.trigger_velocity_update()
+    _settled(view)
 
-    view.shift_week(1)
-    for _ in range(10):
-        Clock.tick()
+    view.viewport.set_offset(1e9)
+    assert view.viewport.offset == view.viewport.max_offset
+    view.viewport.set_offset(-5)
+    assert view.viewport.offset == 0
 
-    spare = view.grid.height - view.scroll.height
-    assert effect.velocity == 0
-    assert (1 - view.scroll.scroll_y) * spare == pytest.approx(7 * HOUR_HEIGHT)
+    for change in (
+        lambda: view.shift_week(1),
+        lambda: view.shift_week(-1),
+        view.go_today,
+        lambda: view.show_week(date(2026, 12, 1)),
+    ):
+        view.viewport.set_offset(0)
+        change()
+        assert view.viewport.offset == pytest.approx(7 * HOUR_HEIGHT)
+
+
+def test_the_opening_position_is_kept_until_the_user_drags() -> None:
+    """A resize before the first drag re-applies 07:00; after it, it does not."""
+    view, _ = _week()
+    _settled(view)
+    view.viewport.set_offset(0)
+
+    view.viewport.height += dp(10)
+    assert view.viewport.offset == pytest.approx(7 * HOUR_HEIGHT)
+
+    x, y = view.viewport.center
+    _swipe(view, [(x, y), (x, y + dp(60))])
+    moved = view.viewport.offset
+    view.viewport.height += dp(10)
+    assert view.viewport.offset == pytest.approx(moved)
+
+
+def test_the_time_line_refreshes_while_the_view_is_on_screen() -> None:
+    """A clock interval redraws the line when shown and stops when hidden."""
+    from kivy.uix.widget import Widget
+
+    clock = [NOW]
+    view, _ = _week()
+    view._now = lambda: clock[0]
+    assert view._tick is None
+    holder = Widget()
+
+    holder.add_widget(view)
+    assert view._tick is not None
+    assert view._tick.timeout == 60
+    before = list(view.grid._now_line.points)
+
+    clock[0] = NOW + timedelta(hours=2)
+    view._refresh_time()
+    assert view.grid._now_line.points != before
+    assert view.grid._now_line.points[1] == pytest.approx(view.grid.y_of(14 * 60))
+
+    tick = view._tick
+    holder.remove_widget(view)
+    assert view._tick is None
+    assert not tick.is_triggered
 
 
 def test_opens_scrolled_to_seven_in_the_morning() -> None:
@@ -728,8 +572,7 @@ def test_opens_scrolled_to_seven_in_the_morning() -> None:
 
     view.scroll_to_hour()
 
-    spare = view.grid.height - view.scroll.height
-    assert (1 - view.scroll.scroll_y) * spare == pytest.approx(7 * HOUR_HEIGHT)
+    assert view.viewport.offset == pytest.approx(7 * HOUR_HEIGHT)
 
 
 class FakeClient:
@@ -830,7 +673,8 @@ def test_week_blocks_open_the_event_form(
     form = manager.get_screen("add_event")
     monkeypatch.setattr(form, "open_for", opened.append)
 
-    main_screen.week_view.blocks[0].dispatch("on_release")
+    view = main_screen.week_view
+    view.grid.activate(*_centre(view, view.blocks[0]))
 
     assert opened == [event]
     assert manager.current == "add_event"
