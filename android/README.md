@@ -27,6 +27,8 @@ editing whole recurring series is out of scope for the first release.
 | `tests/` | Desktop tests for `phone_calendar` with a fake calendar store (`fakes.py`); part of the normal `pytest` run. |
 | `pyproject.toml` | ruff and mypy settings for `src/` (not a package). |
 | `tools/pkg-config` | Hides this PC's pkg-config packages from Android compiles; without it Kivy picks up the desktop SDL2 headers and the build fails. |
+| `assets/` | App icon and splash screen: SVG sources and the PNGs rendered from them (see below). |
+| `res/values-v31/styles.xml` | Added to the APK's resources (`android.add_resources = res`): gives the Android 12+ launch screen the app's background colour. |
 
 On a device the app uses `PhoneCalendarService`; `KIVY_CALENDAR_SERVICE=memory`
 switches any build to in-memory sample events.
@@ -68,6 +70,53 @@ adb logcat -s python                   # the app's Python and Kivy log
 ```
 
 Type-check the Android code with `(cd android && mypy src)`.
+
+## Icon and splash screen
+
+The SVGs in `assets/` are the sources; the PNGs next to them are what
+`buildozer.spec` uses. Buildozer reads these paths relative to `android/`, so
+`build.sh` does not copy them.
+
+| File | What it is |
+| --- | --- |
+| `icon.svg` / `icon.png` | The full icon: three week columns of event blocks and a coral "now" line on a white rounded tile. 512×512 (`icon.filename`); Android 8+ only uses it where the adaptive icon is not supported. |
+| `icon_foreground.svg` / `.png` | Adaptive icon foreground: the blocks and line without the tile, on transparent, scaled to 0.75 about the centre so they stay inside the 66/108 safe zone. 432×432 (`icon.adaptive_foreground.filename`). |
+| `icon_background.svg` / `.png` | Adaptive icon background: plain white. 432×432 (`icon.adaptive_background.filename`). |
+| `presplash.svg` / `.png` | Kivy's presplash: the icon (with a `#DCE9F3` border) at 128 dp and "Kivy Calendar" in Inter SemiBold 28 dp below it, on transparent. 1080×1080 (`presplash.filename`). |
+
+The launcher masks the adaptive icon to its own shape (circle, squircle,
+rounded square); the white background fills the shape and the blocks sit in
+the middle. python-for-android shows the presplash with `FIT_CENTER` on
+`android.presplash_color` (`#F4F9FD`), so the square image is scaled to the
+screen width: on a 1080 px wide phone (about 420 dpi) it is drawn 1:1, the
+icon at 128 dp. The wordmark in `presplash.svg` is already a path, so
+rendering does not need Inter installed; the original `<text>` element is in
+a comment in the file.
+
+Android 12+ first shows its own launch screen (the adaptive icon in a circle)
+before the presplash. `res/values-v31/styles.xml` sets its background to
+`#F4F9FD` by redefining `KivySupportCutout`, the activity theme that
+python-for-android 2026.05.09 generates; check that file when changing
+`p4a.branch` or `android.display_cutout`.
+
+To regenerate the PNGs after changing an SVG (Inkscape 1.4):
+
+```sh
+cd android/assets
+inkscape icon.svg -w 512 -h 512 -o icon.png
+inkscape icon_foreground.svg -w 432 -h 432 -o icon_foreground.png
+inkscape icon_background.svg -w 432 -h 432 -o icon_background.png
+inkscape presplash.svg -w 1080 -h 1080 -o presplash.png
+```
+
+To change the wordmark, put a `<text>` element back in `presplash.svg` and
+convert it to a path again with the app's Inter fonts available, e.g. with a
+fontconfig file that adds `client/src/kivy_calendar/fonts` as a `<dir>`:
+
+```sh
+FONTCONFIG_FILE=/path/to/fonts.conf inkscape presplash-text.svg \
+    --export-text-to-path --export-plain-svg --export-filename=presplash.svg
+```
 
 ## A test calendar on the emulator
 
