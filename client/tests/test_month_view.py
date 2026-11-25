@@ -467,8 +467,8 @@ def test_month_button_is_enabled_and_swaps_the_body(
 
     assert main_screen.current_view == "list"
     assert main_screen.filter_panel.parent is not None
-    assert main_screen.status_label.text == "1 event"
-    assert main_screen.status_label.height > 0
+    assert main_screen.status_label.text == ""
+    assert main_screen.status_label.height == 0
     assert main_screen.content.padding[3] == 0
 
 

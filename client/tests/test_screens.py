@@ -226,8 +226,9 @@ def test_main_screen_lists_events() -> None:
 
     main_screen._show_events([_sample_event()])
 
+    # A plain count folds away in every view.
     assert len(main_screen.rows) == 1
-    assert main_screen.status_label.text == "1 event"
+    assert main_screen.status_label.text == ""
 
 
 def test_tapping_an_event_opens_the_form_in_edit_mode() -> None:
@@ -560,8 +561,9 @@ def test_main_screen_filters_by_name(
     main_screen.name_filter.text = "Standup"
     _run_inline(monkeypatch)
 
+    # A plain count folds away in every view.
     assert len(main_screen.rows) == 1
-    assert main_screen.status_label.text == "1 event"
+    assert main_screen.status_label.text == ""
 
     main_screen.name_filter.text = "Dentist"
     _run_inline(monkeypatch)
