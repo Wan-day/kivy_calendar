@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from kivy.app import App
+from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.uix.screenmanager import ScreenManager
 from kivy.utils import platform
@@ -37,6 +38,8 @@ def default_time_zone() -> str:
     return DEFAULT_TIME_ZONE
 
 
+# A second redraw after resuming, for when the surface is not ready at once.
+RESUME_REDRAW_DELAY = 0.3
 DESKTOP_WINDOW_SIZE = (420, 760)
 
 
@@ -118,6 +121,34 @@ class KivyCalendarApp(App):
             )
             screen_manager.current = "permission"
         return screen_manager
+
+    def on_pause(self) -> bool:
+        """Allow pause mode, so Android keeps the app when it goes away.
+
+        Returning ``False`` would make Kivy finish the activity instead.
+        """
+        return True
+
+    def on_resume(self) -> None:
+        """Redraw after the app was in the background, and reload the events.
+
+        The window can come back black: while the app was away Android may have
+        destroyed the GL context, and Kivy does not draw again until something
+        marks the canvas dirty. Redraw now and again a moment later (the surface
+        may not be ready on the first frame), and refresh the events, because
+        the phone's calendar may have changed meanwhile.
+        """
+        self.redraw()
+        for delay in (0, RESUME_REDRAW_DELAY):
+            Clock.schedule_once(self.redraw, delay)
+        if not self.needs_access:
+            self.main_screen.load_events()
+
+    def redraw(self, *_: Any) -> None:
+        """Reset the viewport and mark every canvas to be drawn again."""
+        Window.update_viewport()
+        Window.canvas.ask_update()
+        self.screen_manager.canvas.ask_update()
 
     def on_start(self) -> None:
         """Load the event list, unless the app is waiting for calendar access."""
