@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from kivy.app import App
@@ -9,6 +10,7 @@ from kivy.core.window import Window
 from kivy.uix.screenmanager import ScreenManager
 from kivy.utils import platform
 
+from kivy_calendar.back_key import BackKeyHandler
 from kivy_calendar.formatting import DEFAULT_TIME_ZONE
 from kivy_calendar.screens.add_event import AddEventScreen
 from kivy_calendar.screens.main import MainScreen
@@ -48,6 +50,18 @@ def apply_window_size(window: Any = Window, platform_name: str = platform) -> bo
         return False
     window.size = DESKTOP_WINDOW_SIZE
     return True
+
+
+def background_hook() -> Callable[[], object] | None:
+    """How to leave the app without closing it: Android only, else ``None``."""
+    if platform == "android":
+        try:
+            from phone_calendar import move_task_to_background  # Android build only
+
+            return move_task_to_background
+        except ImportError:
+            pass
+    return None
 
 
 class FormTransition(EaseOutSlide):
@@ -93,6 +107,8 @@ class KivyCalendarApp(App):
         )
         screen_manager.add_widget(main_screen)
         screen_manager.add_widget(add_event_screen)
+        self.back_keys = BackKeyHandler(screen_manager, background_hook())
+        Window.bind(on_keyboard=self.back_keys.on_keyboard)
         self.main_screen = main_screen
         self.screen_manager = screen_manager
         self.needs_access = isinstance(client, AccessGate) and not client.has_access()
