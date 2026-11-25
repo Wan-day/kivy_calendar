@@ -15,7 +15,7 @@ from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.label import Label
-from kivy.uix.screenmanager import Screen
+from kivy.uix.screenmanager import Screen, ScreenManager
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.spinner import Spinner
 from kivy.uix.widget import Widget
@@ -74,7 +74,12 @@ from kivy_calendar.screens.theme import (
     icon_button,
     primary_button,
 )
-from kivy_calendar.screens.ui import StatusBanner, input_box, plain_input
+from kivy_calendar.screens.ui import (
+    EaseOutSlide,
+    StatusBanner,
+    input_box,
+    plain_input,
+)
 from kivy_calendar.screens.week import WeekView
 from kivy_calendar.service import CalendarService
 
@@ -92,6 +97,8 @@ SWITCHER_HEIGHT = dp(36)
 SEARCH_HEIGHT = dp(38)
 CONTENT_TOP = dp(10)
 CONTENT_SPACING = dp(6)
+# Length of the slide between views, like the list and form screens.
+VIEW_SLIDE_SECONDS = 0.3
 # The views the switcher offers, in order; a view is enabled by register_view.
 VIEW_LABELS = {"list": "List", "week": "Week", "month": "Month"}
 
@@ -400,6 +407,11 @@ class MainScreen(Screen):
             effect_cls=SteadyScrollEffect,
         )
         scroll_view.add_widget(self.event_list)
+        # The list's own page: the date chips and sort spinner belong to it, so
+        # they slide with the list and never shift the shared header.
+        list_page = BoxLayout(orientation="vertical", spacing=CONTENT_SPACING)
+        list_page.add_widget(self.filter_panel)
+        list_page.add_widget(scroll_view)
 
         self.content = content = BoxLayout(
             orientation="vertical",
@@ -409,9 +421,8 @@ class MainScreen(Screen):
         # Views other than the list: name -> widget with ``set_events``.  The
         # list keeps its own rendering; every other view gets the events that
         # pass the name filter (see ``_rebuild_calendar_view``).
-        self.views: dict[str, Widget] = {"list": scroll_view}
+        self.views: dict[str, Widget] = {"list": list_page}
         self.current_view = "list"
-        self._views_with_list_filters = {"list"}
         self.view_buttons: dict[str, FlatButton] = {}
         self.view_switcher = BoxLayout(
             orientation="horizontal",
@@ -433,8 +444,15 @@ class MainScreen(Screen):
             button.bind(on_release=lambda _, view=name: self.show_view(view))
             self.view_buttons[name] = button
             self.view_switcher.add_widget(button)
-        self.view_body = BoxLayout(orientation="vertical")
-        self.view_body.add_widget(scroll_view)
+        # The body slides between the views; the header above it stays put.
+        # Each view sits in a holder on its own screen and is attached only
+        # while its screen is on show (so a hidden week view stops its timer).
+        self.view_body = ScreenManager(
+            transition=EaseOutSlide(duration=VIEW_SLIDE_SECONDS)
+        )
+        self._holders: dict[str, BoxLayout] = {}
+        self.view_body.transition.bind(on_complete=self._detach_hidden_views)
+        self._add_page("list", list_page)
         self.week_view = WeekView(
             self.open_event, self.open_add_event_at, colour_for=self._colour_for
         )
@@ -451,7 +469,6 @@ class MainScreen(Screen):
         content.add_widget(self.view_switcher)
         content.add_widget(self.status_label)
         content.add_widget(search_row)
-        content.add_widget(self.filter_panel)
         content.add_widget(self.view_body)
 
         self.add_button = primary_button(
@@ -508,62 +525,66 @@ class MainScreen(Screen):
         else:
             self._set_status("Events have not been loaded yet.")
 
-    def register_view(
-        self, name: str, widget: Widget, *, list_filters: bool = False
-    ) -> None:
+    def register_view(self, name: str, widget: Widget) -> None:
         """Make the view ``name`` (a key of ``VIEW_LABELS``) selectable.
 
-        ``widget`` needs ``set_events(events)``.  The From/To chips and the
-        sort spinner only show with the view when ``list_filters`` is true.
+        ``widget`` needs ``set_events(events)``.  Grid views end above the
+        floating New event button.
         """
         self.views[name] = widget
-        if list_filters:
-            self._views_with_list_filters.add(name)
+        self._add_page(name, widget)
         self.view_buttons[name].disabled = False
 
+    def _add_page(self, name: str, widget: Widget) -> None:
+        """Give the view ``name`` a screen in the sliding body."""
+        grid = name != "list"
+        holder = BoxLayout(padding=(0, 0, 0, GRID_BOTTOM_ROOM if grid else 0))
+        self._holders[name] = holder
+        page = Screen(name=name)
+        page.add_widget(holder)
+        self.view_body.add_widget(page)
+        if name == self.current_view:
+            holder.add_widget(widget)
+
     def show_view(self, name: str) -> None:
-        """Switch to the registered view ``name``; unknown names are ignored."""
+        """Slide to the registered view ``name``; unknown names are ignored.
+
+        The header does not move; only the body slides, to the right when the
+        new view comes later in the switcher (List, Week, Month).
+        """
         if name not in self.views:
             return
+        order = list(VIEW_LABELS)
+        previous = self.current_view
         self.current_view = name
-        self.view_body.clear_widgets()
-        self.view_body.add_widget(self.views[name])
         for view, button in self.view_buttons.items():
             chosen = view == name
             button.set_colors(
                 fill=SKY if chosen else CLEAR, text=INK if chosen else MUTED
             )
-        self._show_filter_panel(name in self._views_with_list_filters)
-        self._reserve_button_room(name != "list")
+        # Fill the new view first, so it slides in already drawn.
+        holder = self._holders[name]
+        if self.views[name].parent is not holder:
+            holder.add_widget(self.views[name])
         self._rebuild_view()
+        if name != previous:
+            forward = order.index(name) > order.index(previous)
+            self.view_body.transition.direction = "left" if forward else "right"
+            self.view_body.current = name
 
-    def _reserve_button_room(self, grid: bool) -> None:
-        """End grid views above the floating New event button.
-
-        The list scrolls under the button (its own bottom padding); a grid
-        fills the body, so the body itself stops above the button.  Only the
-        bottom edge changes, never the header.
-        """
-        self.content.padding = (
-            dp(20),
-            CONTENT_TOP,
-            dp(20),
-            GRID_BOTTOM_ROOM if grid else 0,
-        )
+    def _detach_hidden_views(self, *_: Any) -> None:
+        """Take the views whose screens are off show out of the widget tree."""
+        if self.view_body.transition.is_active:
+            return
+        for name, holder in self._holders.items():
+            widget = self.views[name]
+            if name != self.view_body.current and widget.parent is holder:
+                holder.remove_widget(widget)
 
     def show_week_of(self, day: date) -> None:
         """Switch to the week view on the week containing ``day``."""
         self.week_view.show_week(day)
         self.show_view("week")
-
-    def _show_filter_panel(self, visible: bool) -> None:
-        """Show or hide the From/To chips and the sort spinner."""
-        shown = self.filter_panel.parent is not None
-        if visible and not shown:
-            # Just above the view body, which is the last child added.
-            self.view_body.parent.add_widget(self.filter_panel, index=1)
-        elif shown and not visible:
-            self.view_body.parent.remove_widget(self.filter_panel)
 
     def _colour_for(self, calendar_id: str) -> Any:
         """Return the colour of a calendar for the grid views."""

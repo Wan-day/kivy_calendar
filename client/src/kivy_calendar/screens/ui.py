@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from kivy.animation import AnimationTransition
 from kivy.graphics import Color, Line
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
+from kivy.uix.screenmanager import SlideTransition
 from kivy.uix.textinput import TextInput
 
 from kivy_calendar.screens.theme import (
@@ -174,3 +176,25 @@ class StatusBanner(Label):
             return
         self.opacity = 1
         self.height = max(self.texture_size[1], dp(34))
+
+
+class EaseOutSlide(SlideTransition):
+    """A horizontal slide that decelerates smoothly (``out_cubic``).
+
+    Kivy's own ``SlideTransition`` always uses ``out_quad``; the screens of
+    this app share this curve and a duration of about 0.3 s (set ``duration``).
+    """
+
+    def on_progress(self, progression: float) -> None:
+        """Move the incoming and outgoing screens along the eased curve."""
+        incoming, outgoing = self.screen_in, self.screen_out
+        x, y = self.manager.pos
+        width = self.manager.width
+        eased = AnimationTransition.out_cubic(progression)
+        incoming.y = outgoing.y = y
+        if self.direction == "right":
+            outgoing.x = x + width * eased
+            incoming.x = x - width * (1 - eased)
+        else:
+            incoming.x = x + width * (1 - eased)
+            outgoing.x = x - width * eased

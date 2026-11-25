@@ -451,13 +451,15 @@ def test_month_button_is_enabled_and_swaps_the_body(
     """Month replaces the list and drops the date chips and sort spinner."""
     main_screen, _ = _main(monkeypatch, _event("a", 11))
     assert not main_screen.view_buttons["month"].disabled
-    assert main_screen.filter_panel.parent is not None
+    assert main_screen.filter_panel.parent is main_screen.views["list"]
 
     main_screen.view_buttons["month"].dispatch("on_release")
 
     assert main_screen.current_view == "month"
-    assert main_screen.view_body.children == [main_screen.month_view]
-    assert main_screen.filter_panel.parent is None
+    assert main_screen.view_body.current == "month"
+    assert main_screen.month_view.parent is main_screen._holders["month"]
+    # The chips and sort spinner stay in the list's own page.
+    assert main_screen.filter_panel.parent is main_screen.views["list"]
     assert [c.text for c in main_screen.month_view.chips] == ["a"]
     # A plain count folds away in grid views.
     assert main_screen.status_label.text == ""
@@ -466,7 +468,7 @@ def test_month_button_is_enabled_and_swaps_the_body(
     main_screen.view_buttons["list"].dispatch("on_release")
 
     assert main_screen.current_view == "list"
-    assert main_screen.filter_panel.parent is not None
+    assert main_screen.view_body.current == "list"
     assert main_screen.status_label.text == ""
     assert main_screen.status_label.height == 0
     assert main_screen.content.padding[3] == 0
@@ -510,7 +512,8 @@ def test_plus_line_switches_the_main_screen_to_that_week(
     cell.more.dispatch("on_release")
 
     assert main_screen.current_view == "week"
-    assert main_screen.view_body.children == [main_screen.week_view]
+    assert main_screen.view_body.current == "week"
+    assert main_screen.week_view.parent is main_screen._holders["week"]
     assert main_screen.week_view.week_layout is not None
     assert main_screen.week_view.week_layout.days[0] == date(2026, 11, 16)
     assert len(main_screen.week_view.blocks) == 8
@@ -551,10 +554,13 @@ def test_grid_views_end_above_the_new_event_button(
     root = main_screen.children[0]
     root.size = (dp(411), dp(914))
     main_screen.show_view("month")
+    main_screen.view_body.transition.stop()
     for widget in (
         root,
         main_screen.content,
         main_screen.view_body,
+        main_screen.view_body.current_screen,
+        main_screen._holders["month"],
         main_screen.month_view,
         main_screen.month_view.grid,
     ):
@@ -567,7 +573,7 @@ def test_grid_views_end_above_the_new_event_button(
     assert min(cell.y for cell in cells) >= button.top
 
     main_screen.show_view("list")
-    assert main_screen.content.padding[3] == 0
+    assert main_screen._holders["list"].padding[3] == 0
 
 
 def test_nav_row_chip_and_arrows_share_a_vertical_centre() -> None:

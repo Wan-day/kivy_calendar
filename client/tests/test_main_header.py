@@ -44,15 +44,14 @@ def test_header_geometry_is_the_same_in_every_view() -> None:
 
 
 def test_only_the_bottom_room_for_the_button_differs_in_grid_views() -> None:
-    """Grid views stop above the New event button; the list scrolls under it."""
+    """Grid pages stop above the New event button; the list scrolls under it."""
     main_screen = _main()
-    assert main_screen.content.padding[3] == 0
+    holders = main_screen._holders
 
-    main_screen.show_view("week")
-    assert main_screen.content.padding[3] > 0
-
-    main_screen.show_view("list")
     assert main_screen.content.padding[3] == 0
+    assert holders["list"].padding[3] == 0
+    assert holders["week"].padding[3] > 0
+    assert holders["month"].padding[3] == holders["week"].padding[3]
 
 
 def test_errors_and_notices_still_show_in_every_view() -> None:
