@@ -7,7 +7,6 @@ from typing import Any
 
 from kivy.effects.scroll import ScrollEffect
 from kivy.metrics import dp
-from kivy.properties import NumericProperty
 
 # A frame longer than this counts as this long while the view coasts, so one
 # stalled frame on a slow phone cannot throw the content across its height.
@@ -32,8 +31,6 @@ class SteadyScrollEffect(ScrollEffect):
       ``scroll_y`` leaves the effect with its old value and speed, which then
       overwrite the new position.  Use :meth:`halt` to move the content.
     """
-
-    drag_threshold = NumericProperty(0)
 
     def reset(self, pos: float) -> None:
         """Pin the value at an end and stop, keeping the real touch history."""
