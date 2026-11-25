@@ -852,6 +852,8 @@ def test_queued_save_returns_to_main_with_a_notice(
 
     assert manager.current == "main"
     assert "will sync automatically" in main_screen.status_label.text
+    # The list is redrawn once the slide back has ended.
+    manager.transition.stop()
     main_screen._show_events([event])
     assert "will sync automatically" in main_screen.status_label.text
     main_screen._show_events([event])
@@ -872,6 +874,7 @@ def test_queued_save_notice_shows_when_the_event_list_is_empty(
     assert event is not None
 
     add_event_screen._persist_event(client, event, editing=False)
+    manager.transition.stop()
     main_screen._show_events([])
     assert "will sync automatically" in main_screen.status_label.text
     main_screen._show_events([])
@@ -1350,6 +1353,9 @@ def test_screens_work_against_the_in_memory_service(
     add_event_screen.save_event()
 
     assert manager.current == "main"
+    # The list is redrawn once the slide back has ended.
+    assert main_screen.rows == []
+    manager.transition.stop()
     assert [row.event.summary for row in main_screen.rows] == ["Dentist"]
     assert main_screen.rows[0].event.calendar_id == "personal"
 

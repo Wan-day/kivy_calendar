@@ -303,6 +303,8 @@ class MainScreen(Screen):
         self.configuration_error = configuration_error
         self.events: list[CalendarEvent] = []
         self._notice = ""
+        # The screen transition a render is waiting for, if any.
+        self._deferred_on: Any = None
         # Calendar names and dot colors for the cards; loaded once, and the
         # list still works without them.
         self._calendar_names: dict[str, str] = {}
@@ -708,6 +710,32 @@ class MainScreen(Screen):
         self._calendars_loaded = True
 
     def _rebuild_view(self) -> None:
+        """Render the shown view's events, once any screen slide has ended.
+
+        Building the cards or grid blocks takes long enough to stall the
+        slide that brings this screen back after a save, so while the screen
+        manager is moving, the work waits for the end of the slide.  Only the
+        shown view is rendered; the others are filled when they are shown.
+        """
+        manager = self.manager
+        transition = manager.transition if manager is not None else None
+        if transition is None or not transition.is_active:
+            self._render_view()
+            return
+        if self._deferred_on is None:
+            self._deferred_on = transition
+            transition.bind(on_complete=self._run_deferred_render)
+
+    def _run_deferred_render(self, *_: Any) -> None:
+        """Render the view that was waiting for the slide to end."""
+        transition = self._deferred_on
+        if transition is None:
+            return
+        transition.unbind(on_complete=self._run_deferred_render)
+        self._deferred_on = None
+        self._render_view()
+
+    def _render_view(self) -> None:
         """Filter, sort and render the events matching the current inputs."""
         if self.current_view != "list":
             self._rebuild_calendar_view()
