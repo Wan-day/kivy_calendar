@@ -132,23 +132,33 @@ device.
 
 Done when: both views work on desktop and Android.
 
-**Shipped in 0.5.0:** a List | Week | Month switcher (List is the default). The
-week view runs Monday to Sunday with an all-day strip, a 24-hour grid opening at
-07:00, side-by-side blocks for overlaps and a current-time line. The month view
-is a Monday-first grid with event chips and "+N", which opens that week. Tapping
-an event opens it; tapping an empty week slot (rounded down to 30 minutes) or a
+**Shipped in 0.5.0:** a List | Week | Month switcher (List is the default) that
+slides between views, with the same header in each; the From/To chips and sort
+live in the list. The week view runs Monday to Sunday with an all-day strip, a
+24-hour grid opening at 07:00 that follows the finger without coasting, and
+side-by-side blocks for overlaps and a current-time line. The month view is a
+Monday-first grid with event chips and "+N", which opens that week. Tapping an
+event opens it; tapping an empty week slot (rounded down to 30 minutes) or a
 month day (09:00) starts a new event there. Both grids use the device's local
-time zone, apply the name filter and hide the date chips and sort; on Android
-they only have the loaded window (30 days back to 180 ahead).
+time zone, apply the name filter and show no count; on Android they only have
+the loaded window (30 days back to 180 ahead). The phone APK is arm64-v8a
+(`APP_ANDROID_ARCHS=x86_64` for the emulator). Checked on a real phone
+(Nothing Phone (3a), Android 15) and on the emulator.
 
 ## 0.6.0: phone polish
 
 - Real phone layouts: no fixed window size, on-screen keyboard never covers
-  the focused field, the back button closes dialogs and screens.
+  the focused field (still open in 0.5.0: Notes), the back button closes
+  dialogs and screens.
 - Returning to the app after it was in the background redraws the screen
   (it stays black in 0.3.0).
 - App icon, name and splash screen.
 - Performance check: a filled list in under 3 s with about 1,000 events.
+- Known leftovers from 0.5.0:
+  - New events show the zone name (e.g. "Europe/Prague") while existing events
+    show the city (e.g. "Berlin").
+  - The list's scrollbar overlaps the cards.
+  - The "Synced N events" message is replaced as soon as the list reloads.
 
 Done when: the app feels like a phone app on a real device, not a resized
 desktop window.

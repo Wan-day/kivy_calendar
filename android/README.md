@@ -9,9 +9,9 @@ and no credentials in the app.
 every visible calendar on the phone (30 days back to 180 days ahead), and
 creates, edits, moves and deletes single events. Occurrences of repeating
 events are read-only. Free times come from the phone's events. Sync asks
-Android to sync the phone's accounts, and unsynced changes are marked. A List | Week | Month switcher adds week and
-month grid views. See
-`ROADMAP.md`.
+Android to sync the phone's accounts, and unsynced changes are marked. A
+List | Week | Month switcher adds week and month grid views. The build is
+checked on a real phone (arm64) and on the emulator (x86_64). See `ROADMAP.md`.
 
 Decided: minimum Android 8.0 (API 26), sideloaded APK only (no Google Play),
 editing whole recurring series is out of scope for the first release.
