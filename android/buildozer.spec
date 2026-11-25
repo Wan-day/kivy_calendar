@@ -21,6 +21,21 @@ requirements = python3,kivy,pydantic==2.12.3,pydantic-core,annotated-types,typin
 orientation = portrait
 fullscreen = 0
 
+# Icon and splash screen, rendered from the SVGs in assets/ (see README.md).
+# Buildozer reads these paths relative to android/, so they are not copied
+# into app/. Android 8+ uses the adaptive icon (white background, blocks in
+# the safe zone); icon.png is the plain fallback.
+icon.filename = assets/icon.png
+icon.adaptive_foreground.filename = assets/icon_foreground.png
+icon.adaptive_background.filename = assets/icon_background.png
+# The presplash is transparent and drawn centred (FIT_CENTER) on
+# presplash_color, the app's background.
+presplash.filename = assets/presplash.png
+android.presplash_color = #F4F9FD
+# res/values-v31/styles.xml gives the Android 12+ launch screen the same
+# background colour.
+android.add_resources = res
+
 # Calendar access and no internet. WRITE_CALENDAR is requested together with
 # READ_CALENDAR so saving (0.3.0) does not ask the user a second time.
 # READ_SYNC_STATS lets Sync wait until Android reports the account sync

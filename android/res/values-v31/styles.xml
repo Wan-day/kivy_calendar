@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ draws its own launch screen (the app icon on
+  windowSplashScreenBackground) before Kivy's presplash. This gives it the
+  app's background colour, the same as android.presplash_color.
+
+  python-for-android 2026.05.09 gives the main activity the theme
+  @style/KivySupportCutout, defined in its generated res/values/strings.xml.
+  This file (copied in by android.add_resources = res) redefines that style
+  for API 31+ only. Keep the items in step with p4a's template: with
+  android.display_cutout = never (the default) the template only sets
+  windowNoTitle.
+-->
+<resources>
+    <style name="KivySupportCutout">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowSplashScreenBackground">#F4F9FD</item>
+    </style>
+</resources>
