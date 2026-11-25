@@ -86,6 +86,16 @@ def _row_spinner(text: str = "", values: list[str] | None = None) -> FlatSpinner
     )
 
 
+def _set_values(spinner: Any, values: list[str]) -> None:
+    """Set a spinner's values unless they are unchanged.
+
+    Kivy rebuilds every option widget on each assignment, even of equal values,
+    which is slow for the long time zone list.
+    """
+    if list(spinner.values) != values:
+        spinner.values = values
+
+
 def _right(widget: Any, height: float = 56) -> BoxLayout:
     """Right-align a fixed-size widget inside a form row."""
     box = BoxLayout(orientation="horizontal", size_hint_x=None, padding=(0, 0))
@@ -220,6 +230,9 @@ class AddEventScreen(Screen):
             bar_width=dp(4), effect_cls=SteadyScrollEffect
         )
         self._top_trigger = Clock.create_trigger(self._scroll_to_top_when_idle, 0)
+        # Work that would change the form's widgets while it slides in or out
+        # waits here until the slide is over.
+        self._after_slide: list[Callable[[], None]] = []
         self.scroll_view.add_widget(form)
 
         self.cancel_button = icon_button("back", fill=CLEAR, border=None)
@@ -282,6 +295,7 @@ class AddEventScreen(Screen):
         makes it an all-day event on that date.  Both are ignored when
         editing.
         """
+        self._run_after_slide()
         self._release_text_inputs()
         self.event = event
         self._new_event_id = uuid4().hex if event is None else ""
@@ -331,6 +345,7 @@ class AddEventScreen(Screen):
     def on_enter(self, *args: Any) -> None:
         """Clear any message left over from a previous visit."""
         self._show_default_status()
+        self._run_after_slide()
 
     def on_pre_leave(self, *args: Any) -> None:
         """Drop focus and handles as soon as the form starts to close."""
@@ -339,6 +354,35 @@ class AddEventScreen(Screen):
     def on_leave(self, *args: Any) -> None:
         """Drop focus, selection and selection handles when the form closes."""
         self._release_text_inputs()
+        self._run_after_slide()
+
+    def _sliding(self) -> bool:
+        """Whether the form is part of a running screen transition."""
+        manager = self.manager
+        if manager is None:
+            return False
+        transition = manager.transition
+        return bool(transition.is_active) and self in (
+            transition.screen_in,
+            transition.screen_out,
+        )
+
+    def _when_slide_ends(self, action: Callable[[], None]) -> None:
+        """Run ``action`` now, or after the form has finished sliding.
+
+        Rebuilding dropdowns or clearing fields while the form moves makes the
+        slide stall, so those changes wait for ``on_enter`` / ``on_leave``.
+        """
+        if self._sliding():
+            self._after_slide.append(action)
+        else:
+            action()
+
+    def _run_after_slide(self) -> None:
+        """Run the changes that were held back during a slide."""
+        pending, self._after_slide = self._after_slide, []
+        for action in pending:
+            action()
 
     def _release_text_inputs(self) -> None:
         """Unfocus every text field and remove its selection handles.
@@ -469,9 +513,11 @@ class AddEventScreen(Screen):
     def _on_time_zones_loaded(self, zones: list[TimeZoneOption]) -> None:
         """Offer the backend's zones, keeping the current selection."""
         self._curated_zones = list(zones)
-        self._refresh_time_zone_choices(
-            self._resolved_time_zone(self.start_timezone.text),
-            self._resolved_time_zone(self.end_timezone.text),
+        self._when_slide_ends(
+            lambda: self._refresh_time_zone_choices(
+                self._resolved_time_zone(self.start_timezone.text),
+                self._resolved_time_zone(self.end_timezone.text),
+            )
         )
 
     def _on_time_zones_failed(self, message: str) -> None:
@@ -493,8 +539,8 @@ class AddEventScreen(Screen):
         self._time_zone_names = {option.label: option.name for option in options}
         self._time_zone_labels = {option.name: option.label for option in options}
         values = [option.label for option in options]
-        self.start_timezone.values = values
-        self.end_timezone.values = values
+        _set_values(self.start_timezone, values)
+        _set_values(self.end_timezone, values)
         self.start_timezone.text = self._time_zone_labels.get(start_zone, start_zone)
         self.end_timezone.text = self._time_zone_labels.get(end_zone, end_zone)
 
@@ -523,6 +569,10 @@ class AddEventScreen(Screen):
 
     def _on_calendars_loaded(self, calendars: list[CalendarSummary]) -> None:
         """Fill the dropdown and select the event's calendar."""
+        self._when_slide_ends(lambda: self._apply_calendars(calendars))
+
+    def _apply_calendars(self, calendars: list[CalendarSummary]) -> None:
+        """Fill the calendar dropdown now."""
         self._calendars = list(calendars)
         self._calendar_labels = {}
         self._labels_by_calendar = {}
@@ -534,7 +584,7 @@ class AddEventScreen(Screen):
             self._calendar_labels[label] = calendar.id
             self._labels_by_calendar[calendar.id] = label
             labels.append(label)
-        self.calendar.values = labels
+        _set_values(self.calendar, labels)
         self.calendar.disabled = not labels or self.read_only
         self._select_current_calendar()
 
@@ -832,13 +882,14 @@ class AddEventScreen(Screen):
         self._set_status("")
         self.event = None
         self._new_event_id = ""
-        self._reset_form()
         self._release_text_inputs()
         manager = self.manager
         if manager is not None:
             manager.current = "main"
             if notice:
                 manager.get_screen("main").set_notice(notice)
+        # Clearing the fields now would blank the form while it slides away.
+        self._when_slide_ends(self._reset_form)
         self.refresh()
 
     def _build_event(self) -> CalendarEvent | None:
