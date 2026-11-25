@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from kivy.animation import AnimationTransition
 from kivy.app import App
 from kivy.core.window import Window
-from kivy.uix.screenmanager import ScreenManager, SlideTransition
+from kivy.uix.screenmanager import ScreenManager
 from kivy.utils import platform
 
 from kivy_calendar.formatting import DEFAULT_TIME_ZONE
@@ -15,6 +14,7 @@ from kivy_calendar.screens.add_event import AddEventScreen
 from kivy_calendar.screens.main import MainScreen
 from kivy_calendar.screens.permission import PermissionScreen
 from kivy_calendar.screens.theme import BACKGROUND
+from kivy_calendar.screens.ui import EaseOutSlide
 from kivy_calendar.service import AccessGate, CalendarService, choose_service
 
 
@@ -35,7 +35,7 @@ def default_time_zone() -> str:
     return DEFAULT_TIME_ZONE
 
 
-class FormTransition(SlideTransition):
+class FormTransition(EaseOutSlide):
     """Slide between screens: left into the form, right back out of it.
 
     A short slide (0.3 s) that starts fast and settles gently, so it feels
@@ -52,24 +52,6 @@ class FormTransition(SlideTransition):
         leaving = getattr(self.screen_out, "name", "")
         self.direction = "right" if leaving == "add_event" else "left"
         super().start(manager)
-
-    def on_progress(self, progression: float) -> None:
-        """Move both screens along an ease-out curve.
-
-        Kivy's own slide eases with ``out_quad``; ``out_cubic`` settles more
-        gently at the end.
-        """
-        incoming, outgoing = self.screen_in, self.screen_out
-        x, y = self.manager.pos
-        width, _ = self.manager.size
-        eased = AnimationTransition.out_cubic(progression)
-        incoming.y = outgoing.y = y
-        if self.direction == "right":
-            outgoing.x = x + width * eased
-            incoming.x = x - width * (1 - eased)
-        else:
-            incoming.x = x + width * (1 - eased)
-            outgoing.x = x - width * eased
 
 
 class KivyCalendarApp(App):
