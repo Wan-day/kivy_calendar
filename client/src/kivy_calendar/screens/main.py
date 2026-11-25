@@ -8,7 +8,7 @@ from datetime import date, datetime
 from typing import Any
 
 from kivy.clock import Clock
-from kivy.graphics import BoxShadow
+from kivy.graphics import BoxShadow, Color
 from kivy.metrics import dp
 from kivy.properties import StringProperty
 from kivy.uix.behaviors import ButtonBehavior
@@ -83,6 +83,7 @@ SORT_CHIP_WIDTH = dp(170)
 FILTER_PANEL_HEIGHT = dp(34)
 ADD_BUTTON_SIZE = (dp(164), dp(56))
 ADD_BUTTON_MARGIN = dp(24)
+SHADOW_COLOUR = (*DEEP_SKY[:3], 0.25)
 # Grid views end above the floating New event button, plus a small gap.
 GRID_BOTTOM_ROOM = ADD_BUTTON_SIZE[1] + ADD_BUTTON_MARGIN + dp(8)
 # Header sizes, the same in every view so switching views never moves them.
@@ -460,16 +461,22 @@ class MainScreen(Screen):
             size_hint=(None, None),
             size=ADD_BUTTON_SIZE,
         )
+        # BoxShadow has no colour of its own: it is drawn in whichever colour
+        # was set last.  Behind the button that was the week grid's coral
+        # time line, so set the shadow colour right before it.
         with self.add_button.canvas.before:
+            self.shadow_colour = Color(*SHADOW_COLOUR)
             shadow = BoxShadow(
-                color=(*DEEP_SKY[:3], 0.25),
                 blur_radius=dp(18),
                 offset=(0, dp(-4)),
                 border_radius=(dp(28), dp(28), dp(28), dp(28)),
             )
         # Draw the shadow beneath the button's fill.
-        self.add_button.canvas.before.remove(shadow)
-        self.add_button.canvas.before.insert(0, shadow)
+        before = self.add_button.canvas.before
+        before.remove(self.shadow_colour)
+        before.remove(shadow)
+        before.insert(0, shadow)
+        before.insert(0, self.shadow_colour)
 
         def follow_button(*_: Any) -> None:
             shadow.pos = self.add_button.pos
