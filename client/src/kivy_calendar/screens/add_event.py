@@ -30,6 +30,7 @@ from kivy_calendar.models import (
     ServiceError,
     TimeZoneOption,
 )
+from kivy_calendar.screens.scroll_effect import SteadyScrollEffect
 from kivy_calendar.screens.theme import (
     BACKGROUND,
     CLEAR,
@@ -215,7 +216,10 @@ class AddEventScreen(Screen):
         self._delete_slot = BoxLayout(size_hint_y=None, height=dp(44))
         form.add_widget(self._delete_slot)
 
-        self.scroll_view = ScrollView(bar_width=dp(4))
+        self.scroll_view = ScrollView(
+            bar_width=dp(4), effect_cls=SteadyScrollEffect
+        )
+        self._top_trigger = Clock.create_trigger(self._scroll_to_top_when_idle, 0)
         self.scroll_view.add_widget(form)
 
         self.cancel_button = icon_button("back", fill=CLEAR, border=None)
@@ -279,7 +283,6 @@ class AddEventScreen(Screen):
         editing.
         """
         self._release_text_inputs()
-        self.scroll_view.scroll_y = 1.0
         self.event = event
         self._new_event_id = uuid4().hex if event is None else ""
         # Services that cannot edit repeating occurrences (the phone calendar)
@@ -321,6 +324,9 @@ class AddEventScreen(Screen):
         self._show_default_status()
         self._load_calendars()
         self._load_time_zones()
+        # The fields above change the content height; scroll to the top again
+        # once Kivy has laid them out.
+        self._top_trigger()
 
     def on_enter(self, *args: Any) -> None:
         """Clear any message left over from a previous visit."""
@@ -348,7 +354,26 @@ class AddEventScreen(Screen):
             field.cancel_selection()
             field._hide_cut_copy_paste()
             field._hide_handles()
-        self.scroll_view.scroll_y = 1.0
+        self._scroll_to_top()
+
+    def _scroll_to_top(self) -> None:
+        """Show the top of the form and stop any scrolling in progress.
+
+        The scroll effect owns the position: setting ``scroll_y`` alone leaves
+        its old value and speed running, and they overwrite it a frame later.
+        """
+        scroll = self.scroll_view
+        effect = scroll.effect_y
+        if isinstance(effect, SteadyScrollEffect):
+            effect.halt(scroll.height - scroll.viewport_size[1])
+        scroll.scroll_y = 1.0
+
+    def _scroll_to_top_when_idle(self, *_: Any) -> None:
+        """Re-apply the top position after layout, unless a finger is down."""
+        effect = self.scroll_view.effect_y
+        if effect is not None and effect.is_manual:
+            return
+        self._scroll_to_top()
 
     def _show_default_status(self) -> None:
         """Show the read-only note, or nothing."""
