@@ -640,25 +640,27 @@ def test_list_is_the_default_view_and_week_and_month_are_available(
     assert main_screen.current_view == "list"
 
 
-def test_switching_to_week_swaps_the_body_and_hides_the_list_filters(
+def test_switching_to_week_swaps_the_body_and_keeps_the_list_filters_in_the_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Week replaces the list and drops the date chips and sort spinner."""
     _, main_screen, _ = _main(monkeypatch, _event("a", 11, 9, 10))
-    assert main_screen.filter_panel.parent is not None
+    assert main_screen.filter_panel.parent is main_screen.views["list"]
 
     main_screen.view_buttons["week"].dispatch("on_release")
 
     assert main_screen.current_view == "week"
-    assert main_screen.view_body.children == [main_screen.week_view]
-    assert main_screen.filter_panel.parent is None
+    assert main_screen.view_body.current == "week"
+    assert main_screen.week_view.parent is main_screen._holders["week"]
+    # The chips and sort spinner stay in the list's own page.
+    assert main_screen.filter_panel.parent is main_screen.views["list"]
     assert [b.text for b in main_screen.week_view.blocks] == ["a"]
     assert main_screen.status_label.text == ""
 
     main_screen.view_buttons["list"].dispatch("on_release")
 
     assert main_screen.current_view == "list"
-    assert main_screen.filter_panel.parent is not None
+    assert main_screen.view_body.current == "list"
     assert len(main_screen.rows) == 1
 
 
