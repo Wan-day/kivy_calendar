@@ -1,0 +1,207 @@
+name: Release
+
+# Builds the signed arm64-v8a APK. For a version tag (tag v0.5.2 for VERSION
+# 0.5.2) it also publishes a GitHub release with the APK attached.
+#
+# The keystore comes from repository secrets (RELEASE_KEYSTORE_BASE64,
+# RELEASE_KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS). It is only written to the
+# runner's temporary folder and removed at the end of the build job.
+#
+# Dry run: start this workflow by hand (Actions > Release > Run workflow).
+# It builds, signs and uploads the APK as a workflow artifact, and creates no
+# release.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and sign APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the tag matches VERSION
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match VERSION ($version). Tag v$version, or fix VERSION."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "Building the APK for version $version from $GITHUB_REF_NAME."
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install system packages for the Android build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip unzip autoconf automake libtool \
+            libncurses-dev libffi-dev libssl-dev zlib1g-dev cmake pkg-config ccache
+
+      - name: Install Buildozer in the environment build.sh expects
+        run: |
+          # android/build.sh uses ~/.local/share/kivy-calendar-buildozer by
+          # default (see android/README.md). The versions match the local setup.
+          python -m venv "$HOME/.local/share/kivy-calendar-buildozer"
+          "$HOME/.local/share/kivy-calendar-buildozer/bin/python" -m pip install \
+            "buildozer==1.6.0" "cython==0.29.37" setuptools
+
+      - name: Restore the Buildozer cache
+        # Holds the Android SDK, NDK and python-for-android downloads.
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            android/.buildozer
+          key: buildozer-v1-${{ runner.os }}-${{ hashFiles('android/buildozer.spec') }}
+          restore-keys: |
+            buildozer-v1-${{ runner.os }}-
+
+      - name: Decode the release keystore
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: |
+          for name in RELEASE_KEYSTORE_BASE64 RELEASE_KEYSTORE_PASSWORD RELEASE_KEY_ALIAS; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Repository secret $name is not set. Without it Buildozer would make an unsigned APK."
+              exit 1
+            fi
+          done
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          chmod 600 "$RUNNER_TEMP/release.keystore"
+
+      - name: Build the arm64-v8a release APK
+        env:
+          APP_ANDROID_ARCHS: arm64-v8a
+          P4A_RELEASE_KEYSTORE: ${{ runner.temp }}/release.keystore
+          P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          P4A_RELEASE_KEYALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+        # Answers any Buildozer prompt with y, as the local build does.
+        run: yes | android/build.sh android release
+
+      - name: Verify the signature and name the APK
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+          built=(android/bin/kivycalendar-*-release.apk)
+          if [ "${#built[@]}" -ne 1 ] || [ ! -f "${built[0]}" ]; then
+            echo "::error::Expected one signed release APK in android/bin/, found ${#built[@]} match(es)."
+            exit 1
+          fi
+
+          asset="kivycalendar-${VERSION}-arm64-v8a.apk"
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out"
+          cp "${built[0]}" "$out/$asset"
+
+          apksigner="$(ls -d "$HOME"/.buildozer/android/platform/android-sdk/build-tools/*/apksigner | sort -V | tail -n 1)"
+          report="$RUNNER_TEMP/apksigner.txt"
+          if ! "$apksigner" verify --verbose --print-certs "$out/$asset" > "$report" 2>&1; then
+            cat "$report"
+            echo "::error::apksigner rejected the APK."
+            exit 1
+          fi
+          cat "$report"
+          if ! grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' "$report"; then
+            echo "::error::The APK has no v2 signature."
+            exit 1
+          fi
+
+          scheme() { grep "Verified using $1 scheme" "$report" | sed 's/.*: //'; }
+          sha="$(sha256sum "$out/$asset" | cut -d' ' -f1)"
+          cert="$(grep -m1 'certificate SHA-256 digest' "$report" | awk '{print $NF}')"
+          {
+            echo "### Release APK"
+            echo
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| File | \`$asset\` |"
+            echo "| SHA-256 | \`$sha\` |"
+            echo "| Signing certificate SHA-256 | \`$cert\` |"
+            echo "| Signature schemes | v1: $(scheme v1), v2: $(scheme v2), v3: $(scheme v3) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "path=$out/$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the signed APK as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-arm64-v8a
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove the release keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download the signed APK
+        uses: actions/download-artifact@v4
+        with:
+          name: apk-arm64-v8a
+          path: apk
+
+      - name: Write the release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v heading="## [$version]" '
+            index($0, heading) == 1 { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "Kivy Calendar $version." > "$RUNNER_TEMP/notes.md"
+            echo "::warning::CHANGELOG.md has no section for $version; the release body is short."
+          fi
+
+      - name: Create the GitHub release with the APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" apk/*.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Kivy Calendar ${GITHUB_REF_NAME#v}" \
+            --notes-file "$RUNNER_TEMP/notes.md"
