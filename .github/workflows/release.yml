@@ -71,12 +71,12 @@ jobs:
             "buildozer==1.6.0" "cython==0.29.37" setuptools
 
       - name: Restore the Buildozer cache
-        # Holds the Android SDK, NDK and python-for-android downloads.
+        # Holds the Android SDK and NDK (about 3.4 GB). android/.buildozer,
+        # the per-arch build tree, grows past GitHub's 10 GB cache limit, so
+        # it is rebuilt on every run.
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.buildozer
-            android/.buildozer
+          path: ~/.buildozer
           key: buildozer-v1-${{ runner.os }}-${{ hashFiles('android/buildozer.spec') }}
           restore-keys: |
             buildozer-v1-${{ runner.os }}-
