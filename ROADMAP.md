@@ -143,9 +143,9 @@ Monday-first grid with event chips and "+N", which opens that week. Tapping an
 event opens it; tapping an empty week slot (rounded down to 30 minutes) or a
 month day (09:00) starts a new event there. Both grids use the device's local
 time zone, apply the name filter and show no count; on Android they only have
-the loaded window (30 days back to 180 ahead). The phone APK is arm64-v8a
-(`APP_ANDROID_ARCHS=x86_64` for the emulator). Checked on a real phone
-(Nothing Phone (3a), Android 15) and on the emulator.
+the loaded window (30 days back to 180 ahead; a year each way since 0.6.1).
+The phone APK is arm64-v8a (`APP_ANDROID_ARCHS=x86_64` for the emulator).
+Checked on a real phone (Nothing Phone (3a), Android 15) and on the emulator.
 
 ## 0.5.1: icon, splash and phone layouts
 
@@ -202,6 +202,9 @@ because GitHub only runs workflows from `main`.
 
 Done when: the app feels like a phone app on a real device, not a resized
 desktop window.
+
+**Shipped in 0.6.1 so far:** the phone's calendar window is a year back to a
+year ahead (was 30 days back to 180 ahead), so the grids reach older events.
 
 ## 0.9.0: release candidate
 
