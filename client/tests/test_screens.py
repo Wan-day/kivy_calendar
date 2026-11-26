@@ -40,6 +40,8 @@ class FakeClient:
         self.calendar_calls = 0
         self.update_sources: list[str] = []
         self.delete_calendars: list[str] = []
+        self.update_scopes: list[str] = []
+        self.delete_scopes: list[str] = []
         self.calendars: list[Any] | None = None
         self.calendar_error: BaseException | None = None
         self.time_zones: list[Any] | None = None
@@ -63,16 +65,22 @@ class FakeClient:
         self.created.append(event)
         return replace(event, queued=self.queued)
 
-    def update_event(self, event: Any, source_calendar_id: str = "") -> Any:
+    def update_event(
+        self, event: Any, source_calendar_id: str = "", scope: str = "this"
+    ) -> Any:
         """Record an update and return the event (queued when configured)."""
         self.updated.append(event)
         self.update_sources.append(source_calendar_id)
+        self.update_scopes.append(str(scope))
         return replace(event, queued=self.queued)
 
-    def delete_event(self, event_id: str, calendar_id: str = "") -> bool:
+    def delete_event(
+        self, event_id: str, calendar_id: str = "", scope: str = "this"
+    ) -> bool:
         """Record a delete."""
         self.deleted.append(event_id)
         self.delete_calendars.append(calendar_id)
+        self.delete_scopes.append(str(scope))
         return self.queued
 
     def list_events(self) -> list[Any]:

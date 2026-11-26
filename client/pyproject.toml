@@ -36,6 +36,9 @@ select = ["E", "F", "W", "I", "UP"]
 
 [tool.mypy]
 python_version = "3.14"
+# The repeat rules come from shared/ (domain.recurrence), which the Android
+# build bundles; screens/repeat_field.py is only loaded there.
+mypy_path = ["../shared/src"]
 
 [[tool.mypy.overrides]]
 # Kivy ships no type stubs; phone_calendar only exists in the Android build
