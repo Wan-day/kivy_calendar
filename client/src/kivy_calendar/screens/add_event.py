@@ -10,12 +10,14 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from kivy.clock import Clock
+from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.modalview import ModalView
 from kivy.uix.screenmanager import Screen
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
+from kivy.utils import platform
 
 from kivy_calendar.formatting import (
     DEFAULT_TIME_ZONE,
@@ -29,6 +31,11 @@ from kivy_calendar.models import (
     FreeSlot,
     ServiceError,
     TimeZoneOption,
+)
+from kivy_calendar.screens.keyboard import (
+    keyboard_inset,
+    reported_keyboard_height,
+    scroll_into_view,
 )
 from kivy_calendar.screens.scroll_effect import SteadyScrollEffect
 from kivy_calendar.screens.theme import (
@@ -278,6 +285,14 @@ class AddEventScreen(Screen):
         layout.add_widget(status_box)
         layout.add_widget(self.scroll_view)
         self.add_widget(layout)
+        # The form leaves room for the on-screen keyboard at its bottom while a
+        # text field is focused, and scrolls that field into the room left.
+        self._layout = layout
+        self._keyboard_inset = 0.0
+        self._watching_keyboard = False
+        for field in (self.summary, self.description):
+            field.bind(focus=self._on_field_focus)
+        self.scroll_view.bind(height=self._show_focused_field)
 
         self.open_for(event)
 
@@ -399,6 +414,49 @@ class AddEventScreen(Screen):
             field._hide_cut_copy_paste()
             field._hide_handles()
         self._scroll_to_top()
+
+    def _focused_field(self) -> Any:
+        """The text field being edited, or ``None``."""
+        for field in (self.summary, self.description):
+            if field.focus:
+                return field
+        return None
+
+    def _on_field_focus(self, *_: Any) -> None:
+        """Follow the keyboard while a field is focused; make room for it."""
+        focused = self._focused_field() is not None
+        if focused and not self._watching_keyboard:
+            Window.bind(keyboard_height=self._update_keyboard_inset)
+            self._watching_keyboard = True
+        elif not focused and self._watching_keyboard:
+            Window.unbind(keyboard_height=self._update_keyboard_inset)
+            self._watching_keyboard = False
+        self._update_keyboard_inset()
+
+    def _update_keyboard_inset(self, *_: Any) -> None:
+        """Reserve the keyboard's height at the form's bottom; show the field."""
+        field = self._focused_field()
+        inset = keyboard_inset(
+            reported_keyboard_height(),
+            Window.height,
+            mobile=platform in ("android", "ios"),
+            focused=field is not None,
+        )
+        if inset != self._keyboard_inset:
+            self._keyboard_inset = inset
+            self._layout.padding = (0, dp(20), 0, inset)
+        if field is not None:
+            Clock.schedule_once(self._show_focused_field, 0)
+
+    def _show_focused_field(self, *_: Any) -> None:
+        """Scroll the focused field into the part of the form above the keyboard."""
+        field = self._focused_field()
+        if field is None:
+            return
+        effect = self.scroll_view.effect_y
+        if effect is not None and effect.is_manual:
+            return  # a finger is scrolling; do not fight it
+        scroll_into_view(self.scroll_view, field)
 
     def _scroll_to_top(self) -> None:
         """Show the top of the form and stop any scrolling in progress.

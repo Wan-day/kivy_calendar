@@ -5,6 +5,22 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-26
+
+- App icon: three week columns of event blocks with a coral "now" line, on a
+  white tile. Android 8+ launchers get an adaptive icon that fits round and
+  squircle masks.
+- Splash screen: the icon and "Kivy Calendar" on the app's light background.
+  Android 12+ shows its own launch screen in the same colour first.
+- The Back button steps back instead of closing the app: it closes an open
+  dialog, then an open dropdown, then the keyboard, then the event form. On
+  the main screen it moves the app to the background without stopping it.
+  Escape on desktop does the same, except it never leaves the app.
+- The on-screen keyboard no longer covers the focused field in the event form;
+  the form shrinks above the keyboard and scrolls the field into view.
+- Coming back to the app redraws the screen and reloads the events.
+- On Android the window always uses the device size.
+
 ## [0.5.0] - 2026-11-25
 
 - A List | Week | Month switcher under the header. List stays the default.

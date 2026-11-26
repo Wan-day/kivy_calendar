@@ -4,7 +4,7 @@ A calendar app to track things easier
 
 ## Status
 
-Version **0.5.0** (see `VERSION`). Changes per version are in
+Version **0.5.1** (see `VERSION`). Changes per version are in
 [CHANGELOG.md](CHANGELOG.md); the plan up to the 1.0.0 Android release is in
 [ROADMAP.md](ROADMAP.md).
 

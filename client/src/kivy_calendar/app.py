@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from kivy.app import App
+from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.uix.screenmanager import ScreenManager
 from kivy.utils import platform
 
+from kivy_calendar.back_key import BackKeyHandler
 from kivy_calendar.formatting import DEFAULT_TIME_ZONE
 from kivy_calendar.screens.add_event import AddEventScreen
 from kivy_calendar.screens.main import MainScreen
@@ -33,6 +36,35 @@ def default_time_zone() -> str:
         except ImportError:
             pass
     return DEFAULT_TIME_ZONE
+
+
+# A second redraw after resuming, for when the surface is not ready at once.
+RESUME_REDRAW_DELAY = 0.3
+DESKTOP_WINDOW_SIZE = (420, 760)
+
+
+def apply_window_size(window: Any = Window, platform_name: str = platform) -> bool:
+    """Give the desktop window a phone-like size; phones keep their screen.
+
+    Return whether the size was set. On Android and iOS the window must use
+    the device's own size, so nothing is forced there.
+    """
+    if platform_name in ("android", "ios"):
+        return False
+    window.size = DESKTOP_WINDOW_SIZE
+    return True
+
+
+def background_hook() -> Callable[[], object] | None:
+    """How to leave the app without closing it: Android only, else ``None``."""
+    if platform == "android":
+        try:
+            from phone_calendar import move_task_to_background  # Android build only
+
+            return move_task_to_background
+        except ImportError:
+            pass
+    return None
 
 
 class FormTransition(EaseOutSlide):
@@ -61,9 +93,7 @@ class KivyCalendarApp(App):
 
     def build(self) -> ScreenManager:
         """Build the screens; ask for calendar access first when it is needed."""
-        if platform not in ("android", "ios"):
-            # A phone-sized window on desktop; phones use their own screen.
-            Window.size = (420, 760)
+        apply_window_size()
         Window.clearcolor = BACKGROUND
         client, configuration_error = build_client()
         screen_manager = ScreenManager(transition=FormTransition())
@@ -80,17 +110,45 @@ class KivyCalendarApp(App):
         )
         screen_manager.add_widget(main_screen)
         screen_manager.add_widget(add_event_screen)
+        self.back_keys = BackKeyHandler(screen_manager, background_hook())
+        Window.bind(on_keyboard=self.back_keys.on_keyboard)
         self.main_screen = main_screen
         self.screen_manager = screen_manager
         self.needs_access = isinstance(client, AccessGate) and not client.has_access()
         if isinstance(client, AccessGate) and self.needs_access:
             screen_manager.add_widget(
-                PermissionScreen(
-                    client, on_granted=self.show_events, name="permission"
-                )
+                PermissionScreen(client, on_granted=self.show_events, name="permission")
             )
             screen_manager.current = "permission"
         return screen_manager
+
+    def on_pause(self) -> bool:
+        """Allow pause mode, so Android keeps the app when it goes away.
+
+        Returning ``False`` would make Kivy finish the activity instead.
+        """
+        return True
+
+    def on_resume(self) -> None:
+        """Redraw after the app was in the background, and reload the events.
+
+        The window can come back black: while the app was away Android may have
+        destroyed the GL context, and Kivy does not draw again until something
+        marks the canvas dirty. Redraw now and again a moment later (the surface
+        may not be ready on the first frame), and refresh the events, because
+        the phone's calendar may have changed meanwhile.
+        """
+        self.redraw()
+        for delay in (0, RESUME_REDRAW_DELAY):
+            Clock.schedule_once(self.redraw, delay)
+        if not self.needs_access:
+            self.main_screen.load_events()
+
+    def redraw(self, *_: Any) -> None:
+        """Reset the viewport and mark every canvas to be drawn again."""
+        Window.update_viewport()
+        Window.canvas.ask_update()
+        self.screen_manager.canvas.ask_update()
 
     def on_start(self) -> None:
         """Load the event list, unless the app is waiting for calendar access."""

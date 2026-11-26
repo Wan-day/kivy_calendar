@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from phone_calendar.service import PhoneCalendarService
 
-__all__ = ["PhoneCalendarService", "create_service", "device_time_zone"]
+__all__ = [
+    "PhoneCalendarService",
+    "create_service",
+    "device_time_zone",
+    "move_task_to_background",
+]
 
 
 def create_service() -> PhoneCalendarService:
@@ -29,3 +34,17 @@ def device_time_zone(fallback: str = "UTC") -> str:
         return str(autoclass("java.util.TimeZone").getDefault().getID())
     except Exception:  # noqa: BLE001 - any JNI failure falls back
         return fallback
+
+
+def move_task_to_background() -> bool:
+    """Send the app to the background the Android way; ``False`` if it failed.
+
+    This is what Back does on the main screen: the app stays alive (like
+    pressing Home) instead of being closed.
+    """
+    try:
+        from android import mActivity  # type: ignore[import-not-found]
+
+        return bool(mActivity.moveTaskToBack(True))
+    except Exception:  # noqa: BLE001 - any JNI failure just means "stay open"
+        return False

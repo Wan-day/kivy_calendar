@@ -28,6 +28,7 @@ major bump to 1.0.0 marks the moment the Android build is usable.
 | 0.3.0 | Android: create, edit, delete and move events | Android |
 | 0.4.0 | Android: Sync and free-time suggestions | Android |
 | 0.5.0 | Week and month grid views | Both |
+| 0.5.1 | Icon, splash and phone layouts | Android |
 | 0.6.0 | Phone polish | Android |
 | 0.7.0 | Release pipeline and docs | Both |
 | 0.9.0 | Release candidate | Android |
@@ -145,14 +146,19 @@ the loaded window (30 days back to 180 ahead). The phone APK is arm64-v8a
 (`APP_ANDROID_ARCHS=x86_64` for the emulator). Checked on a real phone
 (Nothing Phone (3a), Android 15) and on the emulator.
 
+## 0.5.1: icon, splash and phone layouts
+
+Pulled forward from 0.6.0.
+
+**Shipped in 0.5.1:** the app icon (week blocks and a coral "now" line, with an
+adaptive icon for Android 8+) and a splash screen on the app's light
+background, also used for Android 12+'s own launch screen. The Back button
+closes dialogs, dropdowns, the keyboard and the event form before it moves
+the app to the background. The focused form field stays above the keyboard,
+and returning to the app redraws it and reloads the events.
+
 ## 0.6.0: phone polish
 
-- Real phone layouts: no fixed window size, on-screen keyboard never covers
-  the focused field (still open in 0.5.0: Notes), the back button closes
-  dialogs and screens.
-- Returning to the app after it was in the background redraws the screen
-  (it stays black in 0.3.0).
-- App icon, name and splash screen.
 - Performance check: a filled list in under 3 s with about 1,000 events.
 - Known leftovers from 0.5.0:
   - New events show the zone name (e.g. "Europe/Prague") while existing events
