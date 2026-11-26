@@ -5,6 +5,12 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-26
+
+- On Android the app reads events from a year back to a year ahead instead of
+  30 days back to 180 days ahead, so the week and month views show older and
+  later events.
+
 ## [0.6.0] - 2026-11-26
 
 - Release builds are signed APKs, not Google Play bundles

@@ -28,9 +28,10 @@ from phone_calendar.store import (
 
 logger = logging.getLogger(__name__)
 
-# Default list window, matching the Android plan (FR-3).
-DEFAULT_PAST = timedelta(days=30)
-DEFAULT_FUTURE = timedelta(days=180)
+# Default list window: one year each way, so the week and month views reach
+# back and ahead a year.
+DEFAULT_PAST = timedelta(days=365)
+DEFAULT_FUTURE = timedelta(days=365)
 # Android allows zero-length events; the shared model needs end > start.
 MIN_DURATION = timedelta(minutes=1)
 REPEATING_MESSAGE = (

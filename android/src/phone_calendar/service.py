@@ -99,7 +99,7 @@ class PhoneCalendarService:
     # CalendarService ---------------------------------------------------------
 
     def list_events(self) -> list[CalendarEvent]:
-        """Return occurrences from 30 days ago to 180 days ahead."""
+        """Return occurrences from a year ago to a year ahead."""
         now = self._now()
         events = _value(
             self._provider.list_events(now - DEFAULT_PAST, now + DEFAULT_FUTURE)
