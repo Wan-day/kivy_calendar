@@ -5,6 +5,15 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-26
+
+- The event list opens much faster with many events: it builds only the cards
+  near the screen and adds the rest while scrolling. With 1,000 events the list
+  fills in about 0.1 s on desktop instead of 3 to 7 s.
+- Reading the phone's calendar makes one call per value instead of two, which
+  cuts the read of 1,000 events by about a third.
+- `scripts/bench_list.py` times each stage of loading 1,000 events on desktop.
+
 ## [0.5.1] - 2026-11-26
 
 - App icon: three week columns of event blocks with a coral "now" line, on a

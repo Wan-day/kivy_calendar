@@ -29,6 +29,7 @@ major bump to 1.0.0 marks the moment the Android build is usable.
 | 0.4.0 | Android: Sync and free-time suggestions | Android |
 | 0.5.0 | Week and month grid views | Both |
 | 0.5.1 | Icon, splash and phone layouts | Android |
+| 0.5.2 | Performance with 1,000 events | Both |
 | 0.6.0 | Phone polish | Android |
 | 0.7.0 | Release pipeline and docs | Both |
 | 0.9.0 | Release candidate | Android |
@@ -157,9 +158,21 @@ closes dialogs, dropdowns, the keyboard and the event form before it moves
 the app to the background. The focused form field stays above the keyboard,
 and returning to the app redraws it and reloads the events.
 
+## 0.5.2: performance with 1,000 events
+
+The performance check from 0.6.0.
+
+**Shipped in 0.5.2:** the list builds only the cards near the screen, so 1,000
+events fill it in about 0.1 s on desktop (3 to 7 s before), and the phone read
+makes one call per cell instead of two (about 2.5 s down to 1.7 s for 1,009
+events on the software-emulated emulator). On a real phone (Nothing Phone (3a),
+51 events) a cold start reaches a drawn list in 2.5 to 2.9 s, about 2 s of it
+Python and Kivy starting. The 1,000-event read was only measured on the
+emulator, because test data is not added to a real calendar. Not done yet:
+overlapping the first calendar query (0.1 to 0.8 s) with Kivy's start.
+
 ## 0.6.0: phone polish
 
-- Performance check: a filled list in under 3 s with about 1,000 events.
 - Known leftovers from 0.5.0:
   - New events show the zone name (e.g. "Europe/Prague") while existing events
     show the city (e.g. "Berlin").
