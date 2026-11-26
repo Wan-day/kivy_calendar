@@ -27,7 +27,6 @@ CALENDAR_COLUMNS = (
 # CalendarContract.Instances columns: one row per occurrence, recurring
 # series already expanded by Android.
 INSTANCE_COLUMNS = (
-    "_id",
     "event_id",
     "begin",
     "end",

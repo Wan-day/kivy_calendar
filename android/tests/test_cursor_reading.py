@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from phone_calendar.store import read_rows
+from fakes import instance_row
+
+from phone_calendar.store import INSTANCE_COLUMNS, read_rows
 
 
 class FakeCursor:
@@ -79,3 +81,7 @@ def test_one_call_per_cell() -> None:
     assert cursor.calls.count("getString") == 300
     assert cursor.calls.count("moveToNext") == 101
     assert cursor.calls.count("getColumnIndex") == 3
+
+
+def test_fake_occurrence_rows_have_the_columns_the_store_reads() -> None:
+    assert set(instance_row(1, 1, 0, 1)) == set(INSTANCE_COLUMNS)
