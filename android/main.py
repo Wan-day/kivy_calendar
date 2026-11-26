@@ -34,6 +34,10 @@ def check_shared_code() -> bool:
 if __name__ == "__main__":
     check_shared_code()
 
+    from phone_calendar import hide_focus_highlight
+
+    hide_focus_highlight()
+
     from kivy_calendar.__main__ import main
 
     main()
