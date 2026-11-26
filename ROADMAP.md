@@ -32,6 +32,7 @@ major bump to 1.0.0 marks the moment the Android build is usable.
 | 0.5.2 | Performance with 1,000 events | Both |
 | 0.6.0 | Release pipeline and docs | Both |
 | 0.6.1 | Phone polish leftovers | Android |
+| 0.7.0 | Repeating events on Android | Android |
 | 0.9.0 | Release candidate | Android |
 | 1.0.0 | Android build usable with the starting feature set | Android |
 
@@ -206,6 +207,29 @@ desktop window.
 **Shipped in 0.6.1 so far:** the phone's calendar window is a year back to a
 year ahead (was 30 days back to 180 ahead), so the grids reach older events.
 
+## 0.7.0: repeating events on Android
+
+Planned as "not before 1.0.0"; moved in at the user's request.
+
+- New events can repeat: everyday rules (daily, weekly on the start's
+  weekday, monthly on its day or nth weekday, yearly) and custom rules (every
+  N days, weeks, months or years; chosen weekdays; ending on a date or after
+  N times).
+- Saving or deleting an occurrence asks which occurrences it applies to:
+  this event, this and following events, or all events.
+- Rules set in other apps that the form cannot show are kept unchanged.
+
+Done when: a series can be created, changed and deleted with each choice on a
+real phone, and the changes sync to Google.
+
+**Shipped in 0.7.0:** `shared/src/domain/recurrence.py` models the rules; the
+Android provider writes series, exceptions and splits, and the form has a
+Repeat row and the "which occurrences?" question. Checked against Android 16
+on a phone (a local test calendar): exceptions to a series that has not synced
+hide the whole series, so those get an `exdate`; updates to a series must send
+all of its expansion columns. The desktop backend still changes one
+occurrence at a time.
+
 ## 0.9.0: release candidate
 
 - Feature freeze: only fixes from here to 1.0.0.
@@ -220,12 +244,11 @@ Done when: no known bug blocks everyday use.
 - Minimum Android 8.0 (API 26); only `READ_CALENDAR` and `WRITE_CALENDAR`
   permissions.
 - Starting feature set: list, week and month views; create, edit, delete and
-  move events; all-day events and time zones; calendar choice; free-time
-  suggestions; Sync.
+  move events; repeating events; all-day events and time zones; calendar
+  choice; free-time suggestions; Sync.
 
 ## Not planned before 1.0.0
 
-- Editing whole recurring series.
 - Google Play publishing, iOS, widgets, notifications and reminders.
 - Desktop only: the Google reconnect pop-up from the "Google re-authorization
   on Sync" analysis. It would help the self-hosted build, whose Google tokens

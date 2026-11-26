@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 
 
 class ServiceError(Exception):
@@ -23,6 +24,17 @@ class ServiceError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class EditScope(StrEnum):
+    """Which occurrences of a repeating event a change or delete applies to."""
+
+    THIS = "this"
+    FOLLOWING = "following"
+    ALL = "all"
+
+
+ONLY_THIS = (EditScope.THIS,)
 
 
 @dataclass(frozen=True)

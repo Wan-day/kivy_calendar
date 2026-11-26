@@ -90,7 +90,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y xvfb libgl1 libgl1-mesa-dri libegl1 libmtdev1t64
 
       - name: Install client and test dependencies
-        run: python -m pip install ./client pytest
+        # ./shared brings pydantic for the repeat rules the form imports.
+        run: python -m pip install ./shared ./client pytest
 
       - name: Run client tests
         run: cd client && xvfb-run -a -s "-screen 0 1280x1024x24" pytest

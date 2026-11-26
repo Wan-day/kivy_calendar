@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from datetime import UTC, date, datetime, time, timedelta
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -26,8 +26,10 @@ from kivy_calendar.formatting import (
     to_wall_clock_value,
 )
 from kivy_calendar.models import (
+    ONLY_THIS,
     CalendarEvent,
     CalendarSummary,
+    EditScope,
     FreeSlot,
     ServiceError,
     TimeZoneOption,
@@ -70,12 +72,20 @@ from kivy_calendar.screens.ui import (
 )
 from kivy_calendar.service import CalendarService
 
+if TYPE_CHECKING:
+    from kivy_calendar.screens.repeat_field import RepeatField
+
 QUEUED_NOTICE = "Saved. Google is unreachable, so it will sync automatically."
 REPEATING_NOTE = (
     "This is one occurrence of a repeating event. Repeating events can't be "
     "changed here yet; edit them in your phone's calendar app."
 )
 SPINNER_WIDTH = dp(190)
+SCOPE_LABELS = {
+    EditScope.THIS: "This event",
+    EditScope.FOLLOWING: "This and following events",
+    EditScope.ALL: "All events",
+}
 
 
 def _row_spinner(text: str = "", values: list[str] | None = None) -> FlatSpinner:
@@ -160,7 +170,7 @@ class AddEventScreen(Screen):
         self.calendar = _row_spinner()
         self.start = DateTimeField(title="Start")
         self.end = DateTimeField(title="End")
-        self.start.on_user_change = self._keep_duration_after_start_change
+        self.start.on_user_change = self._on_start_changed
         self.start_timezone = _row_spinner(self.time_zone, [self.time_zone])
         self.end_timezone = _row_spinner(self.time_zone, [self.time_zone])
         self.description = plain_input(
@@ -193,6 +203,25 @@ class AddEventScreen(Screen):
         self._end_field = when.add_row("Ends", _right(self.end), height=dp(56))
         self._start_label = self._start_field.caption
         self._end_label = self._end_field.caption
+        # The Repeat row only for services that set repeat rules (Android);
+        # its rules come from shared/, which only those builds bundle.
+        self.repeat: RepeatField | None = None
+        if getattr(client, "edits_repeat_rules", False):
+            from kivy_calendar.screens.repeat_field import RepeatField
+
+            self.repeat = RepeatField(
+                fill=CLEAR,
+                border=None,
+                text_color=MUTED,
+                icon="chevron_right",
+                halign="right",
+                size_hint=(None, None),
+                size=(SPINNER_WIDTH, dp(44)),
+            )
+            when.add_row("Repeat", _right(self.repeat))
+        # The open "which occurrences?" question, if any.
+        self.scope_popup: ModalView | None = None
+        self.scope_buttons: dict[EditScope, Any] = {}
         form.add_widget(when)
 
         zones = Card()
@@ -346,6 +375,11 @@ class AddEventScreen(Screen):
             )
             self.description.text = event.description or ""
             self._apply_all_day_mode(event.all_day)
+        if self.repeat is not None:
+            self.repeat.open_for(
+                event.recurrence if event is not None else None,
+                event.start if event is not None else self._form_start(),
+            )
         if self.read_only:
             self.title_label.text = "Repeating event"
         self._set_fields_editable(not self.read_only)
@@ -499,8 +533,10 @@ class AddEventScreen(Screen):
             self.end,
             self.start_timezone,
             self.end_timezone,
+            self.repeat,
         ):
-            widget.disabled = not editable
+            if widget is not None:
+                widget.disabled = not editable
 
     def save_event(self, *args: Any) -> None:
         """Validate the form and save the event in the background."""
@@ -511,21 +547,125 @@ class AddEventScreen(Screen):
         event = self._build_event()
         if event is None:
             return
+        scopes = self._save_scopes(event)
+        if len(scopes) > 1:
+            self.ask_scope(
+                "Save repeating event",
+                "Which occurrences should change?",
+                scopes,
+                lambda scope: self._start_save(client, event, scope),
+            )
+            return
+        self._start_save(client, event, scopes[0])
+
+    def _start_save(
+        self, client: CalendarService, event: CalendarEvent, scope: EditScope
+    ) -> None:
+        """Save the event in the background with the chosen scope."""
         editing = self.event is not None
         self._set_buttons_enabled(False)
         self._set_status("Saving event…")
         thread = threading.Thread(
             target=self._persist_event,
-            args=(client, event, editing),
+            args=(client, event, editing, scope),
             daemon=True,
         )
         thread.start()
+
+    def _offered_scopes(self) -> tuple[EditScope, ...]:
+        """The scopes the service accepts for an occurrence of a series."""
+        scopes = getattr(self.client, "repeat_scopes", ONLY_THIS)
+        return tuple(scopes) or ONLY_THIS
+
+    def _save_scopes(self, event: CalendarEvent) -> tuple[EditScope, ...]:
+        """The scopes to offer for saving ``event``.
+
+        Only occurrences of a series get a choice. A new repeat rule or
+        another calendar cannot apply to one occurrence alone.
+        """
+        existing = self.event
+        if existing is None or existing.recurring_event_id is None:
+            return ONLY_THIS
+        offered = self._offered_scopes()
+        rule_changed = self.repeat is not None and self.repeat.changed
+        if rule_changed or event.calendar_id != existing.calendar_id:
+            wider = tuple(scope for scope in offered if scope != EditScope.THIS)
+            return wider or offered
+        return offered
+
+    def ask_scope(
+        self,
+        title: str,
+        message: str,
+        scopes: tuple[EditScope, ...],
+        on_choice: Callable[[EditScope], None],
+        *,
+        destructive: bool = False,
+    ) -> None:
+        """Ask which occurrences of a repeating event to change or delete."""
+        popup = ModalView(
+            size_hint=(None, None),
+            size=(dp(320), dp(120) + dp(52) * (len(scopes) + 1)),
+            auto_dismiss=False,
+            background="",
+            background_color=CLEAR,
+            overlay_color=OVERLAY,
+        )
+        content = BoxLayout(orientation="vertical", spacing=dp(8), padding=20)
+        Paint(content, SURFACE, radius=20)
+        content.add_widget(
+            wrapped_label(
+                text=title,
+                font_name=FONT_SEMIBOLD,
+                font_size="17sp",
+                size_hint_y=None,
+                height=dp(28),
+            )
+        )
+        content.add_widget(wrapped_label(text=message, font_size="14sp", color=MUTED))
+        self.scope_popup = popup
+        self.scope_buttons = {}
+
+        def close() -> None:
+            popup.dismiss()
+            self.scope_popup = None
+            self.scope_buttons = {}
+
+        for scope in scopes:
+            button = FlatButton(
+                text=SCOPE_LABELS[scope],
+                fill=CORAL if destructive else SKY,
+                text_color=INK,
+                size_hint_y=None,
+                height=dp(44),
+            )
+
+            def chosen(*_: Any, scope: EditScope = scope) -> None:
+                close()
+                on_choice(scope)
+
+            button.bind(on_release=chosen)
+            self.scope_buttons[scope] = button
+            content.add_widget(button)
+        cancel = FlatButton(
+            text="Keep" if destructive else "Cancel",
+            fill=BACKGROUND,
+            text_color=INK,
+            border=DIVIDER,
+            size_hint_y=None,
+            height=dp(44),
+        )
+        cancel.bind(on_release=lambda *_: close())
+        content.add_widget(cancel)
+        popup.add_widget(content)
+        popup.open()
 
     def _persist_event(
         self,
         client: CalendarService,
         event: CalendarEvent,
         editing: bool,
+        scope: EditScope = EditScope.THIS,
     ) -> None:
         """Create or update the event off the UI thread."""
         try:
@@ -534,6 +674,7 @@ class AddEventScreen(Screen):
                 saved = client.update_event(
                     event,
                     source_calendar_id=current.calendar_id if current else "",
+                    scope=scope,
                 )
             else:
                 saved = client.create_event(event)
@@ -728,6 +869,28 @@ class AddEventScreen(Screen):
             return 60
         return max(1, int(difference.total_seconds() // 60))
 
+    def _on_start_changed(self, previous_start: str) -> None:
+        """Keep the duration and offer repeat rules for the new date."""
+        self._keep_duration_after_start_change(previous_start)
+        self._follow_start_in_repeat()
+
+    def _follow_start_in_repeat(self) -> None:
+        """Let the Repeat row offer rules for the form's start date."""
+        if self.repeat is not None:
+            self.repeat.set_start(self._form_start().date())
+
+    def _form_start(self) -> datetime:
+        """Midnight of the form's start date in its start zone."""
+        try:
+            zone = ZoneInfo(self._resolved_time_zone(self.start_timezone.text))
+        except (ValueError, ZoneInfoNotFoundError):
+            zone = ZoneInfo("UTC")
+        try:
+            day = date.fromisoformat(self.start.text.partition("T")[0])
+        except ValueError:
+            day = datetime.now(zone).date()
+        return datetime.combine(day, time(), tzinfo=zone)
+
     def _keep_duration_after_start_change(self, previous_start: str) -> None:
         """Move the end with a changed start so the duration stays put."""
         if self.all_day.active:
@@ -803,6 +966,7 @@ class AddEventScreen(Screen):
         end_zone = self._resolved_time_zone(self.end_timezone.text)
         self.start.text = self._wall_clock(slot.start, start_zone)
         self.end.text = self._wall_clock(slot.end, end_zone)
+        self._follow_start_in_repeat()
         self._set_status("Suggested a free time.")
 
     def _on_all_day_changed(self, instance: ToggleSwitch, value: bool) -> None:
@@ -830,9 +994,23 @@ class AddEventScreen(Screen):
         self.suggest_button.disabled = all_day or self.save_button.disabled
 
     def confirm_delete(self, *args: Any) -> None:
-        """Ask for confirmation before deleting the current event."""
+        """Ask for confirmation before deleting the current event.
+
+        For an occurrence of a series the question is which occurrences go.
+        """
         event = self.event
         if event is None:
+            return
+        scopes = self._offered_scopes()
+        if event.recurring_event_id is not None and len(scopes) > 1:
+            self.ask_scope(
+                "Delete repeating event?",
+                f"\u201c{event.summary or 'Untitled event'}\u201d repeats. "
+                "Which occurrences should be deleted?",
+                scopes,
+                self._delete_current_event,
+                destructive=True,
+            )
             return
         summary = event.summary or "Untitled event"
         popup = ModalView(
@@ -887,8 +1065,8 @@ class AddEventScreen(Screen):
         delete_button.bind(on_release=confirmed)
         popup.open()
 
-    def _delete_current_event(self) -> None:
-        """Delete the current event in the background."""
+    def _delete_current_event(self, scope: EditScope = EditScope.THIS) -> None:
+        """Delete the current event (or ``scope`` of its series) in the background."""
         client = self.client
         event = self.event
         if client is None or event is None:
@@ -897,7 +1075,7 @@ class AddEventScreen(Screen):
         self._set_status("Deleting event…")
         thread = threading.Thread(
             target=self._delete_event,
-            args=(client, event.id, event.calendar_id),
+            args=(client, event.id, event.calendar_id, scope),
             daemon=True,
         )
         thread.start()
@@ -907,10 +1085,11 @@ class AddEventScreen(Screen):
         client: CalendarService,
         event_id: str,
         calendar_id: str = "",
+        scope: EditScope = EditScope.THIS,
     ) -> None:
         """Delete the event off the UI thread and hand the result back."""
         try:
-            queued = client.delete_event(event_id, calendar_id)
+            queued = client.delete_event(event_id, calendar_id, scope)
         except ServiceError as error:
             message = error.message
             Clock.schedule_once(lambda *_: self._on_delete_failed(message))
@@ -1010,6 +1189,14 @@ class AddEventScreen(Screen):
                 self._set_status("End must be after start.", error=True)
                 return None
             all_day = False
+        if self.repeat is not None:
+            problem = self.repeat.problem(start.date())
+            if problem is not None:
+                self._set_status(problem, error=True)
+                return None
+            recurrence = self.repeat.recurrence(start, all_day=all_day)
+        else:
+            recurrence = existing.recurrence if existing is not None else None
         calendar_id = self._selected_calendar_id()
         if not calendar_id and existing is not None:
             calendar_id = existing.calendar_id
@@ -1032,7 +1219,7 @@ class AddEventScreen(Screen):
             ),
             all_day=all_day,
             description=description or None,
-            recurrence=existing.recurrence if existing is not None else None,
+            recurrence=recurrence,
             extended_properties=(
                 dict(existing.extended_properties or {})
                 if existing is not None

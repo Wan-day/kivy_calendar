@@ -5,16 +5,16 @@ the phone's own calendar store (Android `CalendarContract`), with Android's
 account sync carrying changes to Google Calendar: no server, no Google sign-in
 and no credentials in the app.
 
-**Status (0.6.1):** the app asks for calendar access, lists the events of
+**Status (0.7.0):** the app asks for calendar access, lists the events of
 every visible calendar on the phone (a year back to a year ahead), and
-creates, edits, moves and deletes single events. Occurrences of repeating
-events are read-only. Free times come from the phone's events. Sync asks
+creates, edits, moves and deletes events. Repeating events can be created,
+and changed or deleted for one occurrence, for an occurrence and the ones
+after it, or as a whole. Free times come from the phone's events. Sync asks
 Android to sync the phone's accounts, and unsynced changes are marked. A
 List | Week | Month switcher adds week and month grid views. The build is
 checked on a real phone (arm64) and on the emulator (x86_64). See `ROADMAP.md`.
 
-Decided: minimum Android 8.0 (API 26), sideloaded APK only (no Google Play),
-editing whole recurring series is out of scope for the first release.
+Decided: minimum Android 8.0 (API 26), sideloaded APK only (no Google Play).
 
 ## Files
 
@@ -160,8 +160,24 @@ Developer options, connect it by USB, accept the prompt, and check that
 - Changing an event's calendar copies it into the new calendar and deletes the
   original (Android ties an event to its account). If the delete fails, the
   copy is removed again.
-- Repeating events can only be read; the form opens their occurrences
-  read-only.
+- A repeating event is one `Events` row with `rrule` and `duration` (no
+  `dtend`); Android expands it into `Instances`. Occurrences are listed as
+  `<event id>_<begin ms>`.
+- "This event" adds an exception through `Events.CONTENT_EXCEPTION_URI`
+  (with `duration`; Android refuses `dtend` there). A series that has not
+  synced yet has no sync id, and Android 16 then hides all of its
+  occurrences once it has an exception, so such an occurrence is left out
+  with `exdate` and saved as its own event instead.
+- "This and following" ends the series with `UNTIL` just before the
+  occurrence and inserts a new series from there. A rule that ended after N
+  occurrences keeps its old last day.
+- "All events" rewrites the series row. When its start moves, changed and
+  left-out occurrences no longer line up and are dropped.
+- Any update to a series' times or rule sends all its expansion columns
+  (`SERIES_COLUMNS` in `store.py`): without `rrule` in the same update,
+  Android collapses the series to one event.
+- One occurrence can't move to another calendar; a whole series moves as a
+  copy (cancelled occurrences become `exdate`, changed ones own events).
 
 ## Syncing
 

@@ -18,6 +18,7 @@ from urllib.parse import quote
 from kivy_calendar.models import (
     CalendarEvent,
     CalendarSummary,
+    EditScope,
     FreeSlot,
     ServiceError,
     TimeZoneOption,
@@ -134,12 +135,15 @@ class BackendClient:
         self,
         event: CalendarEvent,
         source_calendar_id: str = "",
+        scope: EditScope = EditScope.THIS,
     ) -> CalendarEvent:
         """Update an existing event in the backend calendar.
 
         ``source_calendar_id`` is the calendar the event is in now, so an id
-        shared by several calendars edits the right copy.
+        shared by several calendars edits the right copy. The backend changes
+        one occurrence of a repeating event at a time (``EditScope.THIS``).
         """
+        _only_this(scope)
         query = _calendar_query(source_calendar_id, "source_calendar_id")
         payload = self._request(
             f"/events/{quote(event.id, safe='')}{query}",
@@ -148,11 +152,17 @@ class BackendClient:
         )
         return self._event_from_payload(payload)
 
-    def delete_event(self, event_id: str, calendar_id: str = "") -> bool:
+    def delete_event(
+        self,
+        event_id: str,
+        calendar_id: str = "",
+        scope: EditScope = EditScope.THIS,
+    ) -> bool:
         """Delete an event from the backend calendar.
 
         Returns ``True`` when the backend only queued the delete for sync.
         """
+        _only_this(scope)
         payload = self._request(
             f"/events/{quote(event_id, safe='')}{_calendar_query(calendar_id)}",
             method="DELETE",
@@ -391,6 +401,15 @@ class BackendClient:
             "recurrence": event.recurrence,
             "extended_properties": event.extended_properties or {},
         }
+
+
+def _only_this(scope: EditScope) -> None:
+    """The backend changes one occurrence at a time; refuse other scopes."""
+    if scope != EditScope.THIS:
+        raise ServiceError(
+            "unsupported",
+            "the backend changes one occurrence of a repeating event at a time",
+        )
 
 
 def _calendar_query(calendar_id: str, name: str = "calendar_id") -> str:
