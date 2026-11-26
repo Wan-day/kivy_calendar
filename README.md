@@ -4,17 +4,41 @@ A calendar app to track things easier
 
 ## Status
 
-Version **0.5.2** (see `VERSION`). Changes per version are in
+Version **0.6.0** (see `VERSION`). Changes per version are in
 [CHANGELOG.md](CHANGELOG.md); the plan up to the 1.0.0 Android release is in
 [ROADMAP.md](ROADMAP.md).
 
 The backend, the FastAPI calendar API, a basic runnable Kivy client, a Docker
-Compose deployment, and CI are implemented. A standalone Android build that
-uses the phone's own calendar instead of the backend is in progress: since
-0.3.0 the APK reads the phone's calendars and creates, edits, moves and
+Compose deployment, and CI are implemented. The standalone Android build
+uses the phone's own calendar instead of the backend: since 0.3.0 the APK reads the phone's calendars and creates, edits, moves and
 deletes events in them, and since 0.4.0 it syncs the phone's accounts and
 shows which changes are not synced yet (`android/README.md`). Since 0.5.0
-both builds also have week and month grid views.
+both builds also have week and month grid views, and since 0.6.0 each
+version tag publishes a signed APK on GitHub Releases.
+
+Architecture is in [docs/architecture.md](docs/architecture.md). Releases
+and backend deployment are in [docs/releasing.md](docs/releasing.md).
+
+## Install on Android
+
+The Android app is sideloaded; it is not on Google Play. Each release is
+attached to a GitHub release as `kivycalendar-<version>-arm64-v8a.apk`.
+
+1. On the phone, open the
+   [releases page](https://github.com/Wan-day/kivy_calendar/releases) and
+   download the APK of the latest version.
+2. Open the downloaded file. Android asks you to allow installs from that
+   source (your browser or file manager). Allow it, then install.
+3. If you installed a debug build from a computer before, uninstall it once
+   first. Release builds are signed with a different key, so Android will not
+   install them over a debug build. Your events are in the phone's calendar and
+   stay there. Only the app's own settings are reset.
+4. Open Kivy Calendar. On the first start it asks for calendar access. Allow
+   it. The app reads and writes the phone's calendars and has no internet
+   permission. If you refuse, the app offers to open its settings page.
+
+The app needs Android 8.0 or newer, on a 64-bit ARM phone. To update, open the
+newer APK the same way; it installs over the old one.
 
 ## Layout
 
