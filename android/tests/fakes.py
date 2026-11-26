@@ -54,7 +54,6 @@ def instance_row(
 ) -> Row:
     """A ``CalendarContract.Instances`` row with sensible defaults."""
     row: Row = {
-        "_id": event_id * 1000,
         "event_id": event_id,
         "begin": begin,
         "end": end,
@@ -171,7 +170,6 @@ class FakeCalendarStore:
 def _as_instance(row: Row) -> Row:
     """An occurrence row for a single (non-repeating) event row."""
     return {
-        "_id": row["_id"] * 1000,
         "event_id": row["_id"],
         "begin": row["dtstart"],
         "end": row["dtend"],

@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from datetime import date, datetime
+from functools import partial
 from typing import Any
 
 from kivy.clock import Clock
@@ -46,6 +47,7 @@ from kivy_calendar.models import (
     ServiceError,
 )
 from kivy_calendar.screens.date_picker import DatePicker
+from kivy_calendar.screens.event_list import ListItem, VirtualList
 from kivy_calendar.screens.month import MonthView
 from kivy_calendar.screens.scroll_effect import SteadyScrollEffect
 from kivy_calendar.screens.theme import (
@@ -84,6 +86,7 @@ from kivy_calendar.screens.week import WeekView
 from kivy_calendar.service import CalendarService
 
 CARD_HEIGHT = dp(68)
+HEADING_HEIGHT = dp(30)
 SORT_CHIP_WIDTH = dp(170)
 FILTER_PANEL_HEIGHT = dp(34)
 ADD_BUTTON_SIZE = (dp(164), dp(56))
@@ -395,19 +398,15 @@ class MainScreen(Screen):
         self._sort_order: SortOrder = DEFAULT_SORT
         self._filter_debounce: Any = None
 
-        self.event_list = BoxLayout(
-            orientation="vertical",
-            size_hint_y=None,
-            spacing=dp(8),
-            # Room below the last card so the New event button never covers it.
-            padding=(0, 0, 0, dp(96)),
-        )
-        self.event_list.bind(minimum_height=self.event_list.setter("height"))
         scroll_view = ScrollView(
             bar_width=dp(4),
             bar_color=(*DEEP_SKY[:3], 0.4),
             effect_cls=SteadyScrollEffect,
         )
+        # Only the cards near the screen are built (1,000 cards would take
+        # seconds on a phone).  Room below the last card so the New event
+        # button never covers it.
+        self.event_list = VirtualList(scroll_view, spacing=dp(8), padding_bottom=dp(96))
         scroll_view.add_widget(self.event_list)
         # The list's own page: the date chips and sort spinner belong to it, so
         # they slide with the list and never shift the shared header.
@@ -596,9 +595,7 @@ class MainScreen(Screen):
     def rows(self) -> list[EventRow]:
         """Return the event cards from top to bottom."""
         return [
-            child
-            for child in reversed(self.event_list.children)
-            if isinstance(child, EventRow)
+            child for child in self.event_list.built() if isinstance(child, EventRow)
         ]
 
     def load_events(self) -> None:
@@ -772,7 +769,7 @@ class MainScreen(Screen):
             or date_to_text
             or self._sort_order != DEFAULT_SORT,
         )
-        self.event_list.clear_widgets()
+        self.event_list.set_items([])
         if not visible:
             empty_text = (
                 "No events match the filters."
@@ -795,23 +792,42 @@ class MainScreen(Screen):
         today = date.today()
         now = datetime.now().astimezone()
         heading_day: date | None = None
+        items: list[ListItem] = []
         for event in visible:
             day = event_date(event)
             if not by_name and day != heading_day:
                 heading_day = day
-                self.event_list.add_widget(self._day_heading(day, today))
-            self.event_list.add_widget(
-                EventRow(
-                    event,
-                    self.open_event,
-                    calendar_name=self._calendar_names.get(event.calendar_id, ""),
-                    dot_color=self._calendar_dots.get(
-                        event.calendar_id, CALENDAR_DOTS[0]
+                items.append(
+                    ListItem(
+                        HEADING_HEIGHT,
+                        partial(self._day_heading, day, today),
+                    )
+                )
+            items.append(
+                ListItem(
+                    CARD_HEIGHT,
+                    partial(
+                        self._event_card,
+                        event,
+                        show_date=by_name,
+                        now=now,
                     ),
-                    show_date=by_name,
-                    now=now,
                 )
             )
+        self.event_list.set_items(items)
+
+    def _event_card(
+        self, event: CalendarEvent, *, show_date: bool, now: datetime
+    ) -> EventRow:
+        """Build the card of one event."""
+        return EventRow(
+            event,
+            self.open_event,
+            calendar_name=self._calendar_names.get(event.calendar_id, ""),
+            dot_color=self._calendar_dots.get(event.calendar_id, CALENDAR_DOTS[0]),
+            show_date=show_date,
+            now=now,
+        )
 
     def _rebuild_calendar_view(self) -> None:
         """Give the shown grid view the events that pass the name filter."""
@@ -847,7 +863,7 @@ class MainScreen(Screen):
             halign="left",
             valign="bottom",
             size_hint_y=None,
-            height=dp(30),
+            height=HEADING_HEIGHT,
         )
         label.bind(size=lambda widget, size: setattr(widget, "text_size", size))
         return label
