@@ -30,8 +30,8 @@ major bump to 1.0.0 marks the moment the Android build is usable.
 | 0.5.0 | Week and month grid views | Both |
 | 0.5.1 | Icon, splash and phone layouts | Android |
 | 0.5.2 | Performance with 1,000 events | Both |
-| 0.6.0 | Phone polish | Android |
-| 0.7.0 | Release pipeline and docs | Both |
+| 0.6.0 | Release pipeline and docs | Both |
+| 0.6.1 | Phone polish leftovers | Android |
 | 0.9.0 | Release candidate | Android |
 | 1.0.0 | Android build usable with the starting feature set | Android |
 
@@ -171,18 +171,10 @@ Python and Kivy starting. The 1,000-event read was only measured on the
 emulator, because test data is not added to a real calendar. Not done yet:
 overlapping the first calendar query (0.1 to 0.8 s) with Kivy's start.
 
-## 0.6.0: phone polish
+## 0.6.0: release pipeline and docs
 
-- Known leftovers from 0.5.0:
-  - New events show the zone name (e.g. "Europe/Prague") while existing events
-    show the city (e.g. "Berlin").
-  - The list's scrollbar overlaps the cards.
-  - The "Synced N events" message is replaced as soon as the list reloads.
-
-Done when: the app feels like a phone app on a real device, not a resized
-desktop window.
-
-## 0.7.0: release pipeline and docs
+Planned as 0.7.0; moved up because most of the phone polish shipped in 0.5.1
+and 0.5.2.
 
 - CI builds a signed APK (keystore kept out of git) and attaches it to a
   GitHub release for each tag.
@@ -191,6 +183,25 @@ desktop window.
 - README section for installing the APK.
 
 Done when: tagging a version produces a downloadable APK.
+
+**Shipped in 0.6.0:** release builds are APKs signed with the release key
+(checked locally with a throwaway key: v2 signature, matching fingerprint).
+`.github/workflows/release.yml` builds, signs and verifies the arm64-v8a APK on
+a `vX.Y.Z` tag that matches `VERSION` and publishes it with the CHANGELOG
+notes; run by hand it is a dry run. The first real run happens after merging,
+because GitHub only runs workflows from `main`.
+
+## 0.6.1: phone polish leftovers
+
+- New events show the zone name (e.g. "Europe/Prague") while existing events
+  show the city (e.g. "Berlin").
+- The list's scrollbar overlaps the cards.
+- The "Synced N events" message is replaced as soon as the list reloads.
+- Outdated docstrings from before the phone service (`memory_service.py`,
+  `android/main.py`, `screens/add_event.py`).
+
+Done when: the app feels like a phone app on a real device, not a resized
+desktop window.
 
 ## 0.9.0: release candidate
 
