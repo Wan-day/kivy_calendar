@@ -1282,7 +1282,7 @@ def test_event_list_groups_cards_under_day_headings() -> None:
 
     headings = [
         child.text
-        for child in reversed(main_screen.event_list.children)
+        for child in main_screen.event_list.built()
         if isinstance(child, Label)
     ]
     assert len(headings) == 2
