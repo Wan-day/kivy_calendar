@@ -41,6 +41,12 @@ def test_spec_images_exist_with_their_size(option: str, size: tuple[int, int]) -
     assert path.with_suffix(".svg").is_file(), f"no source SVG for {path.name}"
 
 
+def test_release_build_makes_a_signed_apk_not_an_aab() -> None:
+    # Sideloading only: Buildozer's release default is an .aab, which
+    # cannot be installed by hand.
+    assert _spec()["android.release_artifact"] == "apk"
+
+
 def test_android_12_splash_uses_the_presplash_colour() -> None:
     spec = _spec()
     assert spec["android.add_resources"] == "res"

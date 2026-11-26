@@ -51,6 +51,9 @@ android.minapi = 26
 android.archs = arm64-v8a
 android.accept_sdk_license = True
 android.allow_backup = False
+# Sideloaded, not Google Play: a release build makes a signed .apk, which is
+# what you install by hand. Buildozer's default for release is an .aab.
+android.release_artifact = apk
 
 # Same release that was checked for the Python, Kivy and pydantic versions.
 p4a.branch = v2026.05.09
