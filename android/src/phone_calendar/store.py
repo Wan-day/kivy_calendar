@@ -38,6 +38,7 @@ INSTANCE_COLUMNS = (
     "calendar_id",
     "rrule",
     "original_id",
+    "originalInstanceTime",
     "availability",
     "eventStatus",
 )
@@ -54,13 +55,33 @@ EVENT_COLUMNS = (
     "allDay",
     "eventTimezone",
     "eventEndTimezone",
+    "duration",
     "rrule",
+    "rdate",
+    "exrule",
+    "exdate",
+    "lastDate",
     "original_id",
+    "originalInstanceTime",
+    "_sync_id",
     "availability",
     "eventStatus",
     "uid2445",
 )
 UID_COLUMN = "uid2445"
+# The columns Android reads to expand a repeating event. An update that sets
+# any of them must set all of them: without ``rrule`` in the same update,
+# Android re-expands the series as a single event (seen on Android 16).
+SERIES_COLUMNS = (
+    "dtstart",
+    "duration",
+    "allDay",
+    "eventTimezone",
+    "rrule",
+    "rdate",
+    "exrule",
+    "exdate",
+)
 
 # Events columns read to find changes the account has not received yet.
 DIRTY_COLUMNS = ("_id", "calendar_id", "dirty")
@@ -119,6 +140,20 @@ class CalendarStore(Protocol):
         """Change columns of one event; return the number of rows changed."""
         ...
 
+    def insert_exception(self, series_id: int, values: Row) -> int:
+        """Change or cancel one occurrence of a series; return the new row's id.
+
+        ``values`` needs ``originalInstanceTime``. Android copies the rest from
+        the series and refuses ``dtend`` (give ``duration``). It matches the
+        exception to its series by sync id, so a series that has not synced
+        yet loses all its occurrences; callers use ``exdate`` there instead.
+        """
+        ...
+
+    def exceptions(self, series_id: int) -> list[Row]:
+        """Return the changed and cancelled occurrences of a series."""
+        ...
+
     def delete_event(self, event_id: int) -> int:
         """Delete one event; return the number of rows deleted."""
         ...
@@ -144,9 +179,9 @@ class JniCalendarStore:
         self._instances_uri = autoclass(
             "android.provider.CalendarContract$Instances"
         ).CONTENT_URI
-        self._events_uri = autoclass(
-            "android.provider.CalendarContract$Events"
-        ).CONTENT_URI
+        events = autoclass("android.provider.CalendarContract$Events")
+        self._events_uri = events.CONTENT_URI
+        self._exception_uri = events.CONTENT_EXCEPTION_URI
         self._content_uris = autoclass("android.content.ContentUris")
         self._content_values = autoclass("android.content.ContentValues")
         self._long = autoclass("java.lang.Long")
@@ -201,6 +236,22 @@ class JniCalendarStore:
         """Delete one event."""
         return int(self._resolver.delete(self._event_uri(event_id), None, None))
 
+    def insert_exception(self, series_id: int, values: Row) -> int:
+        """Insert an exception to one occurrence of a series."""
+        uri = self._resolver.insert(
+            self._content_uris.withAppendedId(self._exception_uri, series_id),
+            self._values(values),
+        )
+        if uri is None:
+            raise RuntimeError("the calendar provider did not change the occurrence")
+        return int(self._content_uris.parseId(uri))
+
+    def exceptions(self, series_id: int) -> list[Row]:
+        """Return the exception rows of a series."""
+        return self._query(
+            self._events_uri, EVENT_COLUMNS, "original_id = ?", [str(series_id)]
+        )
+
     def _event_uri(self, event_id: int) -> Any:
         """The content URI of one event."""
         return self._content_uris.withAppendedId(self._events_uri, event_id)
@@ -244,6 +295,8 @@ INTEGER_COLUMNS = frozenset(
         "event_id",
         "calendar_id",
         "original_id",
+        "originalInstanceTime",
+        "lastDate",
         "begin",
         "end",
         "dtstart",

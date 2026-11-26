@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from fakes import FakeCalendarStore, FakePermissions, calendar_row, instance_row, millis
 
-from kivy_calendar.models import CalendarEvent, ServiceError
+from kivy_calendar.models import CalendarEvent, EditScope, ServiceError
 from kivy_calendar.service import AccessGate, CalendarService
 from phone_calendar.provider import AndroidCalendarProvider
 from phone_calendar.service import PhoneCalendarService
@@ -197,27 +197,101 @@ def test_changing_the_calendar_moves_the_event() -> None:
     assert len(store.event_rows) == 1
 
 
-def test_repeating_occurrences_are_read_only_for_the_screens() -> None:
-    """The form opens them read-only; a save attempt explains why."""
-    first = datetime(2026, 11, 24, 18, 0, tzinfo=BERLIN)
-    store = _writable_store()
-    store.instance_rows = [
-        instance_row(
-            9,
-            1,
-            millis(first),
-            millis(first + timedelta(hours=1)),
-            "Gym",
-            rrule="FREQ=WEEKLY",
-        )
-    ]
-    service = _service(store)
-    (occurrence,) = service.list_events()
+DAILY = ["RRULE:FREQ=DAILY;COUNT=4"]
 
-    assert service.edits_repeating_events is False
+
+def _daily(
+    store: FakeCalendarStore,
+) -> tuple[PhoneCalendarService, list[CalendarEvent]]:
+    """A synced daily series of four, listed for the screens."""
+    service = _service(store)
+    saved = service.create_event(_new_event(recurrence=DAILY))
+    assert saved.recurring_event_id is not None
+    store.event_rows[int(saved.recurring_event_id)]["_sync_id"] = "synced"
+    return service, service.list_events()
+
+
+def _titles(service: PhoneCalendarService) -> list[str]:
+    return [event.summary for event in service.list_events()]
+
+
+def test_offers_every_repeat_choice_to_the_form() -> None:
+    """The form may ask for a scope and set repeat rules."""
+    service = _service(_writable_store())
+
+    assert service.repeat_scopes == (EditScope.THIS, EditScope.FOLLOWING, EditScope.ALL)
+    assert service.edits_repeat_rules is True
+
+
+@pytest.mark.parametrize(
+    ("scope", "titles"),
+    [
+        (EditScope.THIS, ["Dentist", "Dentist", "Check-up", "Dentist"]),
+        (EditScope.FOLLOWING, ["Dentist", "Dentist", "Check-up", "Check-up"]),
+        (EditScope.ALL, ["Check-up"] * 4),
+    ],
+)
+def test_saving_an_occurrence_follows_the_scope(
+    scope: EditScope, titles: list[str]
+) -> None:
+    """The third of four occurrences is renamed with each scope."""
+    store = _writable_store()
+    service, events = _daily(store)
+
+    service.update_event(replace(events[2], summary="Check-up"), "1", scope)
+
+    assert _titles(service) == titles
+
+
+@pytest.mark.parametrize(
+    ("scope", "left"),
+    [(EditScope.THIS, 3), (EditScope.FOLLOWING, 2), (EditScope.ALL, 0)],
+)
+def test_deleting_an_occurrence_follows_the_scope(scope: EditScope, left: int) -> None:
+    """Deleting the third of four occurrences with each scope."""
+    store = _writable_store()
+    service, events = _daily(store)
+
+    assert service.delete_event(events[2].id, "1", scope) is False
+
+    assert len(service.list_events()) == left
+
+
+def test_one_occurrence_cannot_move_to_another_calendar() -> None:
+    """Android keeps exceptions in their series' calendar."""
+    service, events = _daily(_writable_store())
+
     with pytest.raises(ServiceError) as error:
-        service.update_event(replace(occurrence, summary="x"), "1")
-    assert "repeating events" in error.value.message
+        service.update_event(replace(events[1], calendar_id="2"), "1", EditScope.THIS)
+
+    assert "All events" in error.value.message
+    assert {event.calendar_id for event in service.list_events()} == {"1"}
+
+
+def test_moving_all_events_moves_the_series() -> None:
+    """With "All events" the whole series ends up in the other calendar."""
+    store = _writable_store()
+    service, events = _daily(store)
+
+    service.update_event(replace(events[1], calendar_id="2"), "1", EditScope.ALL)
+
+    listed = service.list_events()
+    assert len(listed) == 4
+    assert {event.calendar_id for event in listed} == {"2"}
+
+
+def test_a_new_rule_and_calendar_move_the_new_series() -> None:
+    """A single event that starts repeating can change calendar in one save."""
+    store = _writable_store()
+    service = _service(store)
+    service.create_event(_new_event())
+    (event,) = service.list_events()
+
+    service.update_event(replace(event, recurrence=DAILY, calendar_id="2"), "1")
+
+    listed = service.list_events()
+    assert len(listed) == 4
+    assert {event.calendar_id for event in listed} == {"2"}
 
 
 def test_bad_input_is_a_service_error() -> None:

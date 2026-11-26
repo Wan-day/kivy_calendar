@@ -82,6 +82,8 @@ def test_occurrences_of_a_dirty_series_are_queued() -> None:
     store = FakeCalendarStore(calendars=[calendar_row(1, "me@example.com")])
     row = _event_row(20, 1, 1)
     row["rrule"] = "FREQ=DAILY;COUNT=3"
+    row["duration"] = f"P{(row['dtend'] - row['dtstart']) // 1000}S"
+    row["dtend"] = None
     store.event_rows = {20: row}
 
     events = _service(store).list_events()
