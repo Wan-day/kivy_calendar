@@ -232,33 +232,69 @@ class JniCalendarStore:
         cursor = self._resolver.query(uri, list(columns), selection, args, order)
         if cursor is None:
             return []
-        rows: list[Row] = []
         try:
-            indexes = {name: cursor.getColumnIndex(name) for name in columns}
-            while cursor.moveToNext():
-                rows.append(
-                    {name: _read(cursor, index) for name, index in indexes.items()}
-                )
+            return read_rows(cursor, columns)
         finally:
             cursor.close()
-        return rows
 
 
-# android.database.Cursor field types.
-_FIELD_TYPE_NULL = 0
-_FIELD_TYPE_INTEGER = 1
-_FIELD_TYPE_FLOAT = 2
+# Columns that hold integers. Every other column is read as text.
+INTEGER_COLUMNS = frozenset(
+    {
+        "_id",
+        "event_id",
+        "calendar_id",
+        "original_id",
+        "begin",
+        "end",
+        "dtstart",
+        "dtend",
+        "allDay",
+        "availability",
+        "eventStatus",
+        "dirty",
+        "calendar_access_level",
+        "visible",
+        "isPrimary",
+        "calendar_color",
+    }
+)
 
 
-def _read(cursor: Any, index: int) -> Any:
-    """Read one cell as a Python value; missing columns read as ``None``."""
-    if index < 0:
-        return None
-    kind = cursor.getType(index)
-    if kind == _FIELD_TYPE_NULL:
-        return None
-    if kind == _FIELD_TYPE_INTEGER:
-        return int(cursor.getLong(index))
-    if kind == _FIELD_TYPE_FLOAT:
-        return float(cursor.getDouble(index))
-    return str(cursor.getString(index))
+def read_rows(cursor: Any, columns: tuple[str, ...]) -> list[Row]:
+    """Read every remaining row of ``cursor`` into dicts keyed by column name.
+
+    Each pyjnius call is a slow round trip (about 0.1 ms on a phone), and a
+    1,000-event list has 14,000 cells. So every cell is read with one
+    ``getString`` call: ``None`` for NULL, and integer columns
+    (``INTEGER_COLUMNS``) are converted in Python. Asking ``getType`` first
+    would double the calls. Columns the cursor does not have read as ``None``.
+    """
+    get_string = cursor.getString
+    move_to_next = cursor.moveToNext
+    cells = [
+        (name, cursor.getColumnIndex(name), name in INTEGER_COLUMNS) for name in columns
+    ]
+    rows: list[Row] = []
+    while move_to_next():
+        row: Row = {}
+        for name, index, integer in cells:
+            if index < 0:
+                row[name] = None
+                continue
+            text = get_string(index)
+            row[name] = _number(text) if integer and text is not None else text
+        rows.append(row)
+    return rows
+
+
+def _number(text: str) -> int | float | str:
+    """An integer column's text as a number; anything else stays text."""
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return str(text)
