@@ -108,7 +108,11 @@ unreachable, the write goes to the SQLite retry queue and the response is
 - `screens/week.py`: Monday to Sunday, with an all-day strip and a 24-hour grid
   that opens at 07:00.
 - `screens/month.py`: a Monday-first month grid with event chips.
-- `screens/add_event.py`: create and edit form.
+- `screens/add_event.py`: create and edit form. For a repeating event it asks
+  which occurrences a save or delete applies to.
+- `screens/repeat_field.py`: the form's Repeat row and custom repeat dialog.
+  It uses `shared/src/domain/recurrence.py`, so the form loads it only for a
+  service that sets repeat rules (Android).
 - `screens/permission.py`: asks for calendar access on Android until it is
   granted.
 - `screens/date_picker.py` and `screens/time_picker.py`: the date and time
@@ -163,8 +167,8 @@ them.
 
 - The phone's calendar window is a year back to a year ahead. Week and month
   views only have events in that window.
-- Repeating events are read-only on Android. Series editing is out of scope
-  before 1.0.0 (`ROADMAP.md`).
+- The desktop backend changes one occurrence of a repeating event at a time,
+  and its form has no Repeat row; only the Android build sets repeat rules.
 - Google refresh tokens expire weekly while the Google Cloud app is in Testing
   (`ROADMAP.md`).
 

@@ -5,6 +5,26 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-26
+
+- On Android, events can repeat. The event form has a Repeat row with
+  everyday rules (every day, every week on the start's weekday, every month
+  on its day or nth weekday, every year) and a custom dialog: every N days,
+  weeks, months or years, chosen weekdays, ending on a date or after N times.
+- Saving or deleting an occurrence of a repeating event asks which
+  occurrences it applies to: this event, this and following events, or all
+  events. A new rule or another calendar is offered only for the last two.
+- Repeating rules set in other apps that the form cannot show are kept
+  unchanged.
+- Changed occurrences show their series' rule, so "This and following" and
+  "All events" start from it.
+- Works around two Android 16 calendar quirks found on a phone: a series that
+  has not synced yet loses all its occurrences once it has an exception (the
+  app leaves the occurrence out with `exdate` instead), and an update to a
+  series' times without its rule collapses it to one event.
+- The desktop backend still changes one occurrence at a time; its form is
+  unchanged.
+
 ## [0.6.1] - 2026-11-26
 
 - On Android the app reads events from a year back to a year ahead instead of
