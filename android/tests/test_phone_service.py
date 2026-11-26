@@ -70,14 +70,14 @@ def test_lists_events_for_the_screens() -> None:
     assert events[0].start.tzinfo is not None
 
 
-def test_reads_a_window_from_30_days_back_to_180_ahead() -> None:
-    """The list covers the plan's window around now."""
+def test_reads_a_window_from_a_year_back_to_a_year_ahead() -> None:
+    """The list covers a year either side of now."""
     store = _store_with_events()
 
     _service(store).list_events()
 
     assert store.windows == [
-        (millis(NOW - timedelta(days=30)), millis(NOW + timedelta(days=180)))
+        (millis(NOW - timedelta(days=365)), millis(NOW + timedelta(days=365)))
     ]
 
 

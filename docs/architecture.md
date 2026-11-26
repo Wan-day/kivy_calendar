@@ -161,7 +161,7 @@ them.
 
 ## Known gaps
 
-- The phone's calendar window is 30 days back to 180 days ahead. Week and month
+- The phone's calendar window is a year back to a year ahead. Week and month
   views only have events in that window.
 - Repeating events are read-only on Android. Series editing is out of scope
   before 1.0.0 (`ROADMAP.md`).
