@@ -5,6 +5,18 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-26
+
+- Release builds are signed APKs, not Google Play bundles
+  (`android.release_artifact = apk`), so they can be installed directly.
+- Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`: it builds the
+  arm64-v8a APK, signs it with the release key from the repository secrets,
+  checks the signature and publishes it on GitHub Releases with the
+  CHANGELOG notes. Run by hand, it is a dry run that only uploads the APK.
+- New `docs/releasing.md` (release key, signed builds, publishing, backend
+  deploy) and `docs/architecture.md`, and an "Install on Android" section in
+  the README.
+
 ## [0.5.2] - 2026-11-26
 
 - The event list opens much faster with many events: it builds only the cards

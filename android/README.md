@@ -5,7 +5,7 @@ the phone's own calendar store (Android `CalendarContract`), with Android's
 account sync carrying changes to Google Calendar: no server, no Google sign-in
 and no credentials in the app.
 
-**Status (0.5.2):** the app asks for calendar access, lists the events of
+**Status (0.6.0):** the app asks for calendar access, lists the events of
 every visible calendar on the phone (30 days back to 180 days ahead), and
 creates, edits, moves and deletes single events. Occurrences of repeating
 events are read-only. Free times come from the phone's events. Sync asks
@@ -180,9 +180,6 @@ Developer options, connect it by USB, accept the prompt, and check that
 
 ## Known issues
 
-- The Back button (and Escape) closes the app instead of going back a screen,
-  and after the app has been in the background the screen can stay black
-  until it is restarted. Both are part of the phone polish in 0.6.0.
 - The APK also ships `setuptools`, which the app does not need.
 - Layout sizes are in `dp` (fonts in `sp`) so they scale with screen
   density; use `dp()` for any new pixel size in the screens.

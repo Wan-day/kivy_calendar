@@ -46,7 +46,7 @@ Desktop / self-hosted build:
 Android build:
 - The phone's calendar store is the source of truth; Android syncs it with each account. There is no backend and no local cache of events.
 - Writes go to the phone's calendar store and count as saved once it accepts them; Android uploads them later.
-- Android assigns event IDs. Store the app's own ID in `UID_2445` so a repeated save finds the event instead of duplicating it.
+- Android assigns event IDs. Store the app's own ID in `uid2445` (`UID_2445`) so a repeated save finds the event instead of duplicating it.
 - Extended properties are not available (only sync adapters may write them); do not depend on them.
 - Request only `READ_CALENDAR`, `WRITE_CALENDAR` and `READ_SYNC_STATS` (lets Sync wait for Android's account sync; granted at install); no internet permission.
 - Calendar access runs off the UI thread.
@@ -91,6 +91,6 @@ Never:
 ## More detail, loaded only when needed
 
 - Android build plan and status: `android/README.md`
-- Architecture: `docs/architecture.md` (to be written)
-- Release process (APK build, backend deploy): `docs/releasing.md` (to be written)
+- Architecture: `docs/architecture.md`
+- Release process (APK build, backend deploy): `docs/releasing.md`
 - Subdirectory rules live in their own AGENTS.md, e.g. `backend/AGENTS.md` or `client/AGENTS.md`; the closest file to the code wins.
