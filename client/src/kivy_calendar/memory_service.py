@@ -17,6 +17,7 @@ from kivy_calendar.formatting import DEFAULT_TIME_ZONE
 from kivy_calendar.models import (
     CalendarEvent,
     CalendarSummary,
+    EditScope,
     FreeSlot,
     ServiceError,
     TimeZoneOption,
@@ -79,15 +80,24 @@ class InMemoryCalendarService:
         self,
         event: CalendarEvent,
         source_calendar_id: str = "",
+        scope: EditScope = EditScope.THIS,
     ) -> CalendarEvent:
-        """Replace a stored event, which may move it to another calendar."""
+        """Replace a stored event, which may move it to another calendar.
+
+        Events here do not repeat, so ``scope`` does not matter.
+        """
         if event.id not in self._events:
             raise ServiceError("not_found", f"event {event.id} does not exist")
         saved = self._with_calendar(event)
         self._events[event.id] = saved
         return saved
 
-    def delete_event(self, event_id: str, calendar_id: str = "") -> bool:
+    def delete_event(
+        self,
+        event_id: str,
+        calendar_id: str = "",
+        scope: EditScope = EditScope.THIS,
+    ) -> bool:
         """Delete an event; deletes are never queued here."""
         if self._events.pop(event_id, None) is None:
             raise ServiceError("not_found", f"event {event_id} does not exist")

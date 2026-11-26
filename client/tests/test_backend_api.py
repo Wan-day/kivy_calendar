@@ -20,6 +20,7 @@ from kivy_calendar.api import (
     FreeSlot,
     TimeZoneOption,
 )
+from kivy_calendar.models import EditScope, ServiceError
 
 BASE_URL = "http://backend.test"
 
@@ -568,3 +569,28 @@ def test_update_and_delete_name_the_calendar_in_the_query(
         f"{BASE_URL}/events/event-1?source_calendar_id=work%40example.com",
         f"{BASE_URL}/events/event-1?calendar_id=work%40example.com",
     ]
+
+
+def test_only_single_occurrences_are_sent_to_the_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The backend changes one occurrence at a time; wider scopes are refused."""
+
+    def fake_urlopen(*args: object, **kwargs: object) -> _FakeResponse:
+        raise AssertionError("nothing should be sent")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    event = CalendarEvent(
+        id="occurrence_1",
+        summary="Yoga",
+        start=datetime.fromisoformat("2026-12-01T10:00:00+01:00"),
+        end=datetime.fromisoformat("2026-12-01T11:00:00+01:00"),
+        start_timezone="Europe/Prague",
+        end_timezone="Europe/Prague",
+        recurring_event_id="series",
+    )
+
+    with pytest.raises(ServiceError):
+        _client().update_event(event, scope=EditScope.ALL)
+    with pytest.raises(ServiceError):
+        _client().delete_event("occurrence_1", scope=EditScope.FOLLOWING)

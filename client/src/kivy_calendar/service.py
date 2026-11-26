@@ -16,13 +16,21 @@ from typing import Protocol, runtime_checkable
 from kivy_calendar.models import (
     CalendarEvent,
     CalendarSummary,
+    EditScope,
     FreeSlot,
     TimeZoneOption,
 )
 
 
 class CalendarService(Protocol):
-    """Everything the screens need from a calendar."""
+    """Everything the screens need from a calendar.
+
+    The event form also reads optional attributes: ``repeat_scopes`` (which
+    :class:`~kivy_calendar.models.EditScope` values it accepts for an
+    occurrence; default: only ``THIS``), ``edits_repeat_rules`` (whether the
+    form may set how an event repeats; default: no), and
+    ``saved_notice``/``deleted_notice``.
+    """
 
     def list_events(self) -> list[CalendarEvent]:
         """Return the events to show in the list."""
@@ -44,12 +52,26 @@ class CalendarService(Protocol):
         self,
         event: CalendarEvent,
         source_calendar_id: str = "",
+        scope: EditScope = EditScope.THIS,
     ) -> CalendarEvent:
-        """Update ``event``; ``source_calendar_id`` is the calendar it is in now."""
+        """Update ``event``; ``source_calendar_id`` is the calendar it is in now.
+
+        For an occurrence of a repeating event, ``scope`` says which
+        occurrences change.
+        """
         ...
 
-    def delete_event(self, event_id: str, calendar_id: str = "") -> bool:
-        """Delete an event; return ``True`` when the delete is only queued."""
+    def delete_event(
+        self,
+        event_id: str,
+        calendar_id: str = "",
+        scope: EditScope = EditScope.THIS,
+    ) -> bool:
+        """Delete an event; return ``True`` when the delete is only queued.
+
+        For an occurrence of a repeating event, ``scope`` says which
+        occurrences go.
+        """
         ...
 
     def sync(self) -> int:
