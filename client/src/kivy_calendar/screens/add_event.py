@@ -81,6 +81,8 @@ REPEATING_NOTE = (
     "changed here yet; edit them in your phone's calendar app."
 )
 SPINNER_WIDTH = dp(190)
+# Row padding, spacing and the "Repeat" caption, left of the Repeat dropdown.
+REPEAT_CAPTION = dp(100)
 SCOPE_LABELS = {
     EditScope.THIS: "This event",
     EditScope.FOLLOWING: "This and following events",
@@ -218,7 +220,15 @@ class AddEventScreen(Screen):
                 size_hint=(None, None),
                 size=(SPINNER_WIDTH, dp(44)),
             )
-            when.add_row("Repeat", _right(self.repeat))
+            repeat_row = when.add_row("Repeat", _right(self.repeat))
+            repeat = self.repeat
+
+            def widen(*_: Any) -> None:
+                # Rules read longer than calendar names: give the dropdown
+                # all the room the short "Repeat" caption leaves.
+                repeat.width = max(SPINNER_WIDTH, repeat_row.width - REPEAT_CAPTION)
+
+            repeat_row.bind(width=widen)
         # The open "which occurrences?" question, if any.
         self.scope_popup: ModalView | None = None
         self.scope_buttons: dict[EditScope, Any] = {}
