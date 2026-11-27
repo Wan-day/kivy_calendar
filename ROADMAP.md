@@ -230,6 +230,11 @@ hide the whole series, so those get an `exdate`; updates to a series must send
 all of its expansion columns. The desktop backend still changes one
 occurrence at a time.
 
+**0.7.1** fixes what the first test on a phone found: the grey screen after
+the keyboard closes (Android's default focus highlight on SDL's surface), the
+keyboard covering the custom repeat dialog's buttons, off-center numbers in
+that dialog, and long rules cut off in the Repeat row.
+
 ## 0.9.0: release candidate
 
 - Feature freeze: only fixes from here to 1.0.0.

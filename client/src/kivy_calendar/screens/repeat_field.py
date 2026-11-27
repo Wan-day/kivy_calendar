@@ -30,11 +30,15 @@ from domain.recurrence import (
     rule_text,
     week_of_month,
 )
+from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.modalview import ModalView
+from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
+from kivy.utils import platform
 
+from kivy_calendar.screens.keyboard import keyboard_inset, reported_keyboard_height
 from kivy_calendar.screens.theme import (
     BACKGROUND,
     BORDER,
@@ -59,6 +63,8 @@ FOREIGN = "Custom rule (kept as set)"
 ENDS_NEVER = "Never"
 ENDS_ON = "On a date"
 ENDS_AFTER = "After a number of times"
+# Room kept between the lifted dialog and the keyboard or the window top.
+DIALOG_MARGIN = dp(8)
 
 # What the Repeat row holds: a rule the form can edit, the text of a rule set
 # in another app (kept as it is), or None for "does not repeat".
@@ -220,9 +226,7 @@ class RepeatDialog(ModalView):
             )
         )
 
-        self.interval = plain_input(
-            "1", input_filter="int", input_type="number", halign="center"
-        )
+        self.interval = _number_input("1")
         self.interval.text = str(rule.interval)
         self.unit = _spinner(
             [UNIT_NAMES[frequency][1] for frequency in Frequency],
@@ -270,9 +274,7 @@ class RepeatDialog(ModalView):
         self.until_row.add_widget(Widget(size_hint_x=None, width=dp(64)))
         self.until_row.add_widget(self.until)
 
-        self.count = plain_input(
-            "10", input_filter="int", input_type="number", halign="center"
-        )
+        self.count = _number_input("10")
         self.count.text = str(rule.count or 10)
         self.count_row = _line()
         self.count_row.add_widget(Widget(size_hint_x=None, width=dp(64)))
@@ -305,6 +307,36 @@ class RepeatDialog(ModalView):
         self.ends.bind(text=lambda *_: self._arrange())
         self._arrange()
         self.add_widget(content)
+        # Lift the dialog above the keyboard while a number is typed in.
+        for field in (self.interval, self.count):
+            field.bind(focus=self._align_center)
+        Window.bind(keyboard_height=self._align_center)
+        self.bind(
+            on_dismiss=lambda *_: Window.unbind(keyboard_height=self._align_center)
+        )
+
+    def keyboard_inset(self) -> float:
+        """Height the keyboard takes at the bottom while a field is focused."""
+        return keyboard_inset(
+            reported_keyboard_height(),
+            Window.height,
+            mobile=platform in ("android", "ios"),
+            focused=self.interval.focus or self.count.focus,
+        )
+
+    def _align_center(self, *_args: Any) -> None:
+        """Center the dialog, or keep it above the keyboard while typing.
+
+        Overrides ``ModalView``'s own centering, which runs on every size and
+        window change. Without a keyboard it centers as usual.
+        """
+        inset = self.keyboard_inset()
+        window = self._window
+        if not inset or window is None:
+            super()._align_center()
+            return
+        self.center_x = window.center[0]
+        self.y = min(inset + DIALOG_MARGIN, window.height - self.height - DIALOG_MARGIN)
 
     @property
     def frequency(self) -> Frequency:
@@ -426,6 +458,21 @@ class RepeatDialog(ModalView):
                 button.set_colors(fill=SKY, border=None, text=INK)
             else:
                 button.set_colors(fill=SURFACE, border=BORDER, text=MUTED)
+
+
+def _number_input(hint: str) -> TextInput:
+    """A whole-number field with its text centered in the box both ways."""
+    field = plain_input(hint, input_filter="int", input_type="number", halign="center")
+
+    def center(*_: Any) -> None:
+        # TextInput has no vertical alignment; equal top and bottom padding
+        # around one line puts the text in the middle of the box.
+        room = max((field.height - field.line_height) / 2, 0)
+        field.padding = (0, room, 0, room)
+
+    field.bind(height=center, line_height=center)
+    center()
+    return field
 
 
 def _line(**kwargs: Any) -> BoxLayout:

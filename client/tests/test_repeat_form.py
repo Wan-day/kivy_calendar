@@ -296,3 +296,57 @@ def test_single_events_are_saved_and_deleted_without_a_question(
     assert screen.scope_popup is None
     assert client.update_scopes == ["this"]
     assert client.updated[0].recurrence == ["RRULE:FREQ=DAILY"]
+
+
+def test_the_number_fields_center_their_text() -> None:
+    """Equal padding above and below one line keeps the digits mid-box."""
+    from kivy.metrics import dp
+
+    screen = _new_event_form(_phone_client())
+    screen.repeat.open_dialog()
+    dialog = screen.repeat.dialog
+
+    for field in (dialog.interval, dialog.count):
+        field.height = dp(44)
+        _, top, _, bottom = field.padding
+        assert top == bottom
+        assert top == pytest.approx((dp(44) - field.line_height) / 2)
+
+
+def test_the_dialog_moves_above_the_keyboard_while_typing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a phone the keyboard would cover Cancel and Done otherwise."""
+    from kivy.core.window import Window
+
+    from kivy_calendar.screens import repeat_field
+    from kivy_calendar.screens.keyboard import ASSUMED_KEYBOARD_SHARE
+
+    monkeypatch.setattr(repeat_field, "platform", "android")
+    screen = _new_event_form(_phone_client())
+    screen.repeat.open_dialog()
+    dialog = screen.repeat.dialog
+    dialog.open(animation=False)
+    try:
+        dialog.count.focus = True
+        keyboard = Window.height * ASSUMED_KEYBOARD_SHARE
+        assert dialog.y >= keyboard
+        dialog.count.focus = False
+        assert dialog.center_y == pytest.approx(Window.center[1])
+    finally:
+        dialog.dismiss(animation=False)
+
+
+def test_the_repeat_dropdown_uses_the_rows_free_width() -> None:
+    """Long rules like "Every week on Mon, Fri, 6 times" fit on a phone."""
+    from kivy.metrics import dp
+
+    from kivy_calendar.screens.add_event import REPEAT_CAPTION, SPINNER_WIDTH
+
+    screen = _new_event_form(_phone_client())
+    row = screen.repeat.parent.parent.parent
+
+    row.width = dp(380)
+    assert screen.repeat.width == pytest.approx(dp(380) - REPEAT_CAPTION)
+    row.width = dp(200)
+    assert screen.repeat.width == SPINNER_WIDTH

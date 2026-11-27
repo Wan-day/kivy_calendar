@@ -5,6 +5,17 @@ All notable changes to Kivy Calendar. Versions follow the rules in
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-27
+
+- On Android the app no longer turns slightly grey after the keyboard
+  closes. Android drew its default focus highlight over the whole app once
+  keys were typed (Enter, a hardware keyboard); it is now turned off.
+- The custom repeat dialog moves above the keyboard while the interval or
+  the number of times is typed, so Cancel and Done stay reachable, and the
+  numbers sit in the middle of their boxes.
+- The Repeat row uses the free width of the form, so rules like "Every week
+  on Mon, Fri, 6 times" are no longer cut off.
+
 ## [0.7.0] - 2026-11-26
 
 - On Android, events can repeat. The event form has a Repeat row with
